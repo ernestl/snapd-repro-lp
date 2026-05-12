@@ -1,0 +1,5 @@
+# Compiled binary
+snapd-repro-lp
+
+# Bug output directories
+bug-*/
