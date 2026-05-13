@@ -96,12 +96,12 @@ func (m *LXDManager) Launch(image string, instanceType string) error {
 	}
 
 	// Wait for the instance's network to come up by polling for an
-	// IPv4 address on eth0. VMs need more time to boot.
+	// IPv4 address. VMs need more time to boot.
 	timeout := 30 * time.Second
 	if instanceType == "vm" {
-		timeout = 60 * time.Second
+		timeout = 120 * time.Second
 	}
-	if err := m.waitForNetwork(timeout); err != nil {
+	if err := m.waitForNetwork(timeout, instanceType); err != nil {
 		// Best-effort cleanup on failure.
 		_ = m.Delete()
 		return err
@@ -155,23 +155,50 @@ func (m *LXDManager) Delete() error {
 	return nil
 }
 
-// waitForNetwork polls the container until an IPv4 address appears on
-// eth0, or until the timeout expires.
-func (m *LXDManager) waitForNetwork(timeout time.Duration) error {
+// waitForNetwork polls the instance until an IPv4 address appears,
+// or until the timeout expires. For VMs it uses "lxc list" which
+// works before the LXD agent is ready; for containers it uses
+// "lxc exec" to check eth0 directly.
+func (m *LXDManager) waitForNetwork(timeout time.Duration, instanceType string) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		cmd := m.execCommand(context.Background(), "lxc", "exec", m.name, "--", "ip", "-4", "addr", "show", "dev", "eth0")
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		if err := cmd.Run(); err == nil {
-			if strings.Contains(out.String(), "inet ") {
-				return nil
+		var hasIP bool
+		if instanceType == "vm" {
+			cmd := m.execCommand(context.Background(), "lxc", "list", m.name, "--format", "csv", "-c", "4")
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			cmd.Stderr = &out
+			if err := cmd.Run(); err == nil {
+				line := strings.TrimSpace(out.String())
+				if line != "" && !strings.HasPrefix(line, "No") {
+					parts := strings.Fields(line)
+					for _, p := range parts {
+						if strings.Contains(p, ".") && !strings.HasPrefix(p, "127.") {
+							hasIP = true
+							break
+						}
+					}
+				}
+			}
+		} else {
+			cmd := m.execCommand(context.Background(), "lxc", "exec", m.name, "--", "ip", "-4", "addr", "show", "dev", "eth0")
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			cmd.Stderr = &out
+			if err := cmd.Run(); err == nil {
+				hasIP = strings.Contains(out.String(), "inet ")
 			}
 		}
-		time.Sleep(500 * time.Millisecond)
+		if hasIP {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
 	}
-	return fmt.Errorf("timeout waiting for network in container %s", m.name)
+	kind := "container"
+	if instanceType == "vm" {
+		kind = "VM"
+	}
+	return fmt.Errorf("timeout waiting for network in %s %s", kind, m.name)
 }
 
 // generateContainerName returns a name like "snapd-repro-a1b2c3".

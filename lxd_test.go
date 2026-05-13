@@ -55,6 +55,16 @@ func handleLXCHelper(args []string) {
 		// Success — no output needed.
 		os.Exit(0)
 
+	case "list":
+		if behavior == "network_timeout" {
+			// Simulate no network — output empty/no IP.
+			fmt.Println(",,No,,")
+			os.Exit(0)
+		}
+		// Simulate an instance with an IPv4 address.
+		fmt.Println("10.0.0.5")
+		os.Exit(0)
+
 	case "exec":
 		// args: exec <name> -- <cmd...>
 		// Find the "--" separator.
