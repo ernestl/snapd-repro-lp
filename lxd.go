@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math/rand"
 	"os/exec"
@@ -24,7 +25,7 @@ type ContainerManager interface {
 
 	// Exec runs a command inside the container and returns the combined
 	// stdout/stderr output and exit code.
-	Exec(command string) (*ExecResult, error)
+	Exec(ctx context.Context, command string) (*ExecResult, error)
 
 	// Delete force-removes the container.
 	Delete() error
@@ -39,7 +40,7 @@ type LXDManager struct {
 	running bool
 	// execCommand is the function used to create exec.Cmd. Overridable
 	// for testing.
-	execCommand func(name string, arg ...string) *exec.Cmd
+	execCommand func(cxt context.Context, name string, arg ...string) *exec.Cmd
 }
 
 // NewLXDManager creates a new LXD container manager. The container name
@@ -47,7 +48,7 @@ type LXDManager struct {
 func NewLXDManager() *LXDManager {
 	return &LXDManager{
 		name:        generateContainerName(),
-		execCommand: exec.Command,
+		execCommand: exec.CommandContext,
 	}
 }
 
@@ -58,7 +59,7 @@ func NewLXDManagerFromName(name string) *LXDManager {
 	return &LXDManager{
 		name:        name,
 		running:     true,
-		execCommand: exec.Command,
+		execCommand: exec.CommandContext,
 	}
 }
 
@@ -76,7 +77,7 @@ func (m *LXDManager) Launch(image string) error {
 	}
 
 	imageRef := "ubuntu:" + image
-	cmd := m.execCommand("lxc", "launch", imageRef, m.name)
+	cmd := m.execCommand(context.Background(), "lxc", "launch", imageRef, m.name)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -100,12 +101,12 @@ func (m *LXDManager) Launch(image string) error {
 
 // Exec runs a shell command inside the container. The command is
 // executed via "lxc exec <name> -- bash -c <command>".
-func (m *LXDManager) Exec(command string) (*ExecResult, error) {
+func (m *LXDManager) Exec(context context.Context, command string) (*ExecResult, error) {
 	if !m.running {
 		return nil, fmt.Errorf("container %s is not running", m.name)
 	}
 
-	cmd := m.execCommand("lxc", "exec", m.name, "--", "bash", "-c", command)
+	cmd := m.execCommand(context, "lxc", "exec", m.name, "--", "bash", "-c", command)
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
@@ -128,7 +129,7 @@ func (m *LXDManager) Exec(command string) (*ExecResult, error) {
 
 // Delete force-removes the container.
 func (m *LXDManager) Delete() error {
-	cmd := m.execCommand("lxc", "delete", "--force", m.name)
+	cmd := m.execCommand(context.Background(), "lxc", "delete", "--force", m.name)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -147,7 +148,7 @@ func (m *LXDManager) Delete() error {
 func (m *LXDManager) waitForNetwork(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		cmd := m.execCommand("lxc", "exec", m.name, "--", "ip", "-4", "addr", "show", "dev", "eth0")
+		cmd := m.execCommand(context.Background(), "lxc", "exec", m.name, "--", "ip", "-4", "addr", "show", "dev", "eth0")
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -25,7 +26,7 @@ type Tool interface {
 	Definition() ToolDef
 	// Execute runs the tool with the given JSON arguments and returns
 	// the result.
-	Execute(argsJSON string) (*ToolResult, error)
+	Execute(ctx context.Context, argsJSON string) (*ToolResult, error)
 }
 
 // --- run_command tool ---
@@ -68,7 +69,7 @@ type runCommandArgs struct {
 	Command string `json:"command"`
 }
 
-func (t *RunCommandTool) Execute(argsJSON string) (*ToolResult, error) {
+func (t *RunCommandTool) Execute(ctx context.Context, argsJSON string) (*ToolResult, error) {
 	var args runCommandArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return nil, fmt.Errorf("parsing run_command args: %w", err)
@@ -77,7 +78,7 @@ func (t *RunCommandTool) Execute(argsJSON string) (*ToolResult, error) {
 		return &ToolResult{Output: "error: command is required"}, nil
 	}
 
-	result, err := t.container.Exec(args.Command)
+	result, err := t.container.Exec(ctx, args.Command)
 	if err != nil {
 		return nil, fmt.Errorf("executing command: %w", err)
 	}
@@ -155,7 +156,7 @@ type reportResultArgs struct {
 	Script      string `json:"script"`
 }
 
-func (t *ReportResultTool) Execute(argsJSON string) (*ToolResult, error) {
+func (t *ReportResultTool) Execute(_ context.Context, argsJSON string) (*ToolResult, error) {
 	var args reportResultArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return nil, fmt.Errorf("parsing report_result args: %w", err)
@@ -172,8 +173,6 @@ func (t *ReportResultTool) Execute(argsJSON string) (*ToolResult, error) {
 		StopAgent: true,
 	}, nil
 }
-
-// --- ToolExecutor ---
 
 // --- read_file tool ---
 
@@ -217,7 +216,7 @@ type readFileArgs struct {
 	Path string `json:"path"`
 }
 
-func (t *ReadFileTool) Execute(argsJSON string) (*ToolResult, error) {
+func (t *ReadFileTool) Execute(_ context.Context, argsJSON string) (*ToolResult, error) {
 	var args readFileArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return nil, fmt.Errorf("parsing read_file args: %w", err)
@@ -345,7 +344,7 @@ type reportPlanArgs struct {
 	AttachmentsReviewed []string   `json:"attachments_reviewed"`
 }
 
-func (t *ReportPlanTool) Execute(argsJSON string) (*ToolResult, error) {
+func (t *ReportPlanTool) Execute(_ context.Context, argsJSON string) (*ToolResult, error) {
 	var args reportPlanArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return nil, fmt.Errorf("parsing report_plan args: %w", err)
@@ -390,12 +389,12 @@ func (e *ToolExecutor) ToolDefinitions() []ToolDef {
 }
 
 // Execute dispatches a tool call by name and returns the result.
-func (e *ToolExecutor) Execute(name, argsJSON string) (*ToolResult, error) {
+func (e *ToolExecutor) Execute(ctx context.Context, name, argsJSON string) (*ToolResult, error) {
 	tool, ok := e.tools[name]
 	if !ok {
 		return &ToolResult{
 			Output: fmt.Sprintf("error: unknown tool %q", name),
 		}, nil
 	}
-	return tool.Execute(argsJSON)
+	return tool.Execute(ctx, argsJSON)
 }

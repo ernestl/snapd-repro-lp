@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -106,8 +107,8 @@ func handleLXCHelper(args []string) {
 
 // fakeExecCommand returns a function that creates exec.Cmd pointing back
 // to TestHelperProcess, with the given behavior set via LXC_BEHAVIOR.
-func fakeExecCommand(behavior string) func(string, ...string) *exec.Cmd {
-	return func(name string, args ...string) *exec.Cmd {
+func fakeExecCommand(behavior string) func(_ context.Context, name string, args ...string) *exec.Cmd {
+	return func(_ context.Context, name string, args ...string) *exec.Cmd {
 		cs := []string{"-test.run=TestHelperProcess", "--", name}
 		cs = append(cs, args...)
 		cmd := exec.Command(os.Args[0], cs...)
@@ -188,7 +189,7 @@ func TestLXDManagerExec(t *testing.T) {
 		t.Fatalf("Launch failed: %v", err)
 	}
 
-	result, err := m.Exec("snap list")
+	result, err := m.Exec(context.Background(), "snap list")
 	if err != nil {
 		t.Fatalf("Exec failed: %v", err)
 	}
@@ -210,7 +211,7 @@ func TestLXDManagerExecNonZero(t *testing.T) {
 	// Now swap to exec_fail behavior.
 	launchM.execCommand = fakeExecCommand("exec_fail")
 
-	result, err := launchM.Exec("nonexistent_command")
+	result, err := launchM.Exec(context.Background(), "nonexistent_command")
 	if err != nil {
 		t.Fatalf("Exec should not error on non-zero exit: %v", err)
 	}
@@ -222,7 +223,7 @@ func TestLXDManagerExecNonZero(t *testing.T) {
 func TestLXDManagerExecNotRunning(t *testing.T) {
 	m := newTestLXDManager("success")
 
-	_, err := m.Exec("snap list")
+	_, err := m.Exec(context.Background(), "snap list")
 	if err == nil {
 		t.Fatal("expected error for Exec on non-running container")
 	}
