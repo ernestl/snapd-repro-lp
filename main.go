@@ -507,157 +507,6 @@ Requires OPENROUTER_API_KEY to be set.`,
 	},
 }
 
-// --- test command tree ---
-
-var testCmd = &cobra.Command{
-	Use:   "test",
-	Short: "Test individual components",
-	Long:  "Subcommands for manually testing LLM, LXD, and other components.",
-}
-
-var testChatCmd = &cobra.Command{
-	Use:   "chat [message]",
-	Short: "Send a message to the LLM and print the response",
-	Long:  "Quick smoke test for the OpenRouter LLM integration. Requires OPENROUTER_API_KEY.",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		resolveModel()
-
-		apiKey := os.Getenv("OPENROUTER_API_KEY")
-		if apiKey == "" {
-			return fmt.Errorf("OPENROUTER_API_KEY environment variable is not set")
-		}
-
-		llmClient := NewLLMClient(apiKey, modelName)
-		messages := []ChatMessage{
-			TextMessage(RoleUser, args[0]),
-		}
-
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer stop()
-
-		out := cmd.OutOrStdout()
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Sending to %s...\n", modelName)
-
-		resp, err := llmClient.ChatCompletion(ctx, messages, nil)
-		if err != nil {
-			return fmt.Errorf("LLM request failed: %w", err)
-		}
-
-		if len(resp.Choices) == 0 {
-			return fmt.Errorf("no choices in response")
-		}
-
-		msg := resp.Choices[0].Message
-		if msg.Content != nil {
-			_, _ = fmt.Fprintln(out, *msg.Content)
-		} else {
-			_, _ = fmt.Fprintln(out, "(no text content in response)")
-		}
-
-		if resp.Usage != nil {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\n[tokens: %d prompt + %d completion = %d total]\n",
-				resp.Usage.PromptTokens,
-				resp.Usage.CompletionTokens,
-				resp.Usage.TotalTokens)
-		}
-
-		return nil
-	},
-}
-
-var testLxdCmd = &cobra.Command{
-	Use:   "lxd",
-	Short: "Test LXD container operations",
-	Long:  "Subcommands for manually testing LXD container launch, exec, and delete.",
-}
-
-var testLxdLaunchVM bool
-
-var testLxdLaunchCmd = &cobra.Command{
-	Use:     "launch [version]",
-	Short:   "Launch an LXD instance",
-	Long:    "Launch an Ubuntu LXD instance and print its name. Use the name with exec and delete.",
-	Example: "  snapd-repro-lp test lxd launch 24.04\n  snapd-repro-lp test lxd launch --vm 24.04",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		version := args[0]
-		instance := NewLXDManager()
-		out := cmd.OutOrStdout()
-
-		instanceType := "container"
-		if testLxdLaunchVM {
-			instanceType = "vm"
-		}
-		kind := "container"
-		if instanceType == "vm" {
-			kind = "VM"
-		}
-
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Launching %s %s (ubuntu:%s)...\n", kind, instance.Name(), version)
-		if err := instance.Launch(version, instanceType); err != nil {
-			return fmt.Errorf("launch failed: %w", err)
-		}
-
-		_, _ = fmt.Fprintln(out, instance.Name())
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Instance is ready. Run commands with:\n")
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  snapd-repro-lp test lxd exec %s \"snap version\"\n", instance.Name())
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Delete with:\n")
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  snapd-repro-lp test lxd delete %s\n", instance.Name())
-		return nil
-	},
-}
-
-var testLxdExecCmd = &cobra.Command{
-	Use:     "exec [container] [command]",
-	Short:   "Execute a command in an LXD container",
-	Long:    "Run a shell command inside an existing LXD container and print the output.",
-	Example: "  snapd-repro-lp test lxd exec snapd-repro-abc123 \"snap version\"",
-	Args:    cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		containerName := args[0]
-		command := args[1]
-
-		container := NewLXDManagerFromName(containerName)
-		out := cmd.OutOrStdout()
-
-		if verbose {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Executing in %s: %s\n", containerName, command)
-		}
-
-		result, err := container.Exec(context.Background(), command)
-		if err != nil {
-			return fmt.Errorf("exec failed: %w", err)
-		}
-
-		_, _ = fmt.Fprint(out, result.Output)
-		if result.ExitCode != 0 {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[exit code: %d]\n", result.ExitCode)
-		}
-		return nil
-	},
-}
-
-var testLxdDeleteCmd = &cobra.Command{
-	Use:     "delete [container]",
-	Short:   "Delete an LXD container",
-	Long:    "Force-delete an existing LXD container.",
-	Example: "  snapd-repro-lp test lxd delete snapd-repro-abc123",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		containerName := args[0]
-		container := NewLXDManagerFromName(containerName)
-
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Deleting container %s...\n", containerName)
-		if err := container.Delete(); err != nil {
-			return fmt.Errorf("delete failed: %w", err)
-		}
-
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Container %s deleted.\n", containerName)
-		return nil
-	},
-}
-
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
 	rootCmd.PersistentFlags().StringVar(&modelName, "model", "", "LLM model to use via OpenRouter (env: OPENROUTER_MODEL)")
@@ -671,9 +520,6 @@ func init() {
 	execCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "directory containing bug output (default: current directory)")
 	execCmd.Flags().StringVar(&ubuntuOverride, "ubuntu", "", "override the Ubuntu version from the plan (e.g. 22.04)")
 
-	// test lxd launch flags.
-	testLxdLaunchCmd.Flags().BoolVar(&testLxdLaunchVM, "vm", false, "launch as a virtual machine instead of a container")
-
 	// reproduce command flags (combines plan + exec).
 	reproduceCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "directory to write output (default: current directory)")
 	reproduceCmd.Flags().BoolVarP(&forceOverwrite, "force", "f", false, "overwrite existing bug directory without prompting")
@@ -682,13 +528,6 @@ func init() {
 	rootCmd.AddCommand(planCmd)
 	rootCmd.AddCommand(execCmd)
 	rootCmd.AddCommand(reproduceCmd)
-
-	testLxdCmd.AddCommand(testLxdLaunchCmd)
-	testLxdCmd.AddCommand(testLxdExecCmd)
-	testLxdCmd.AddCommand(testLxdDeleteCmd)
-	testCmd.AddCommand(testChatCmd)
-	testCmd.AddCommand(testLxdCmd)
-	rootCmd.AddCommand(testCmd)
 }
 
 func main() {

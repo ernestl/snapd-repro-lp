@@ -144,18 +144,16 @@ func TestReproduceWritesJSON(t *testing.T) {
 func TestModelFromEnv(t *testing.T) {
 	modelName = ""
 	t.Setenv("OPENROUTER_MODEL", "custom/model")
-	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	_, _ = executeCommand("test", "chat", "hello")
+	resolveModel()
 	if modelName != "custom/model" {
 		t.Errorf("model = %q, want %q", modelName, "custom/model")
 	}
 }
 
 func TestModelFlagOverridesEnv(t *testing.T) {
-	modelName = ""
+	modelName = "cli-model"
 	t.Setenv("OPENROUTER_MODEL", "env/model")
-	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	_, _ = executeCommand("--model", "cli-model", "test", "chat", "hello")
+	resolveModel()
 	if modelName != "cli-model" {
 		t.Errorf("model = %q, want %q", modelName, "cli-model")
 	}
@@ -163,9 +161,8 @@ func TestModelFlagOverridesEnv(t *testing.T) {
 
 func TestModelDefault(t *testing.T) {
 	modelName = ""
-	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	t.Setenv("OPENROUTER_MODEL", "")
-	_, _ = executeCommand("test", "chat", "hello")
+	resolveModel()
 	if modelName != "anthropic/claude-sonnet-4" {
 		t.Errorf("model = %q, want %q", modelName, "anthropic/claude-sonnet-4")
 	}

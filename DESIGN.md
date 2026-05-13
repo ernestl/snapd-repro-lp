@@ -59,7 +59,11 @@ A generic agent loop that is not tied to any specific tool or phase:
 2. If the LLM returns tool calls, execute them via the `ToolExecutor`.
 3. If any tool sets `StopAgent: true`, stop and return `AgentResult{StoppedByTool: toolName}`.
 4. If the LLM responds with text (no tool call), stop and return `AgentResult{LastMessage: text}`.
-5. Repeat up to `--max-iter` iterations (default 20).
+5. Repeat up to `--max-iter` iterations (default 60).
+
+If the iteration budget is exhausted, the agent returns a soft result
+(`MaxIterationsReached: true`) with a summary of recent tool activity rather
+than a hard error. This ensures `result.json` is always produced.
 
 The caller creates the appropriate tools, wires them into a `ToolExecutor`, and
 inspects the specific tool for structured output after the agent returns (e.g.,
@@ -79,12 +83,15 @@ registered with a `ToolExecutor` that dispatches by name.
   Directories are listed with their entries; files larger than 100KB are truncated.
 - `report_plan` -- Submit a structured reproduction plan (`ReproPlan`). Sets
   `StopAgent: true`.
+- `describe_skill` / `load_skill` -- Browse and load domain-specific skill
+  documents (e.g. snap testing patterns) that get injected into the conversation.
 
 **Execution phase tools:**
 - `run_command` -- Execute a shell command in the LXD container via
   `ContainerManager.Exec()`. Output larger than 50KB is truncated.
 - `report_result` -- Submit the reproduction result (`ReproResult`: reproduced
   bool, explanation, script). Sets `StopAgent: true`.
+- `describe_skill` / `load_skill` -- Same skill tools as the planning phase.
 
 ### LXD Manager (`lxd.go`)
 
@@ -110,22 +117,32 @@ numbers so the planning LLM can determine the right Ubuntu version from bug tags
 
 `SavePlan`/`LoadPlan` handle JSON serialization of `ReproPlan`.
 
+### Prompt HTML Output (`htmloutput.go`)
+
+Each agent run saves its full system prompt and user message as a self-contained
+HTML file (`planning-prompt.html`, `execution-prompt.html`) for debugging.
+Always written regardless of `--verbose`.
+
+### Skills System (`skills.go`)
+
+An embedded library of domain-specific knowledge documents (e.g. snap testing
+patterns, LXD usage). Skills are indexed in `skills.json` and stored as markdown
+files under `skills/`. Both phases expose `describe_skill` (list available
+skills) and `load_skill` (inject a skill's content into the conversation) tools
+so the LLM can pull in relevant knowledge on demand.
+
 ## CLI Commands
 
 ```
 snapd-repro-lp plan <bug-ref>           # Fetch + analyze, write plan.json
-snapd-repro-lp exec <plan-file>         # Load plan, run in LXD container
+snapd-repro-lp exec <bug-ref>           # Load plan, run in LXD container
 snapd-repro-lp reproduce <bug-ref>      # plan + exec in one step
-
-snapd-repro-lp test chat <message>      # LLM smoke test
-snapd-repro-lp test lxd launch <ver>    # Launch a container
-snapd-repro-lp test lxd exec <name> <cmd>
-snapd-repro-lp test lxd delete <name>
 ```
 
 **Global flags:** `--model`, `--max-iter`, `--verbose`
-**Plan flags:** `--output-dir`, `--force`
-**Exec flags:** `--ubuntu` (override version from plan)
+**Plan flags:** `--output-dir`/`-o`, `--force`/`-f`
+**Exec flags:** `--output-dir`/`-o`, `--ubuntu` (override version from plan)
+**Reproduce flags:** `--output-dir`/`-o`, `--force`/`-f`, `--ubuntu`
 
 ## Data Flow
 
@@ -134,12 +151,14 @@ Launchpad API
      |
      v
 bug-<id>/
-   +-- bug-<id>.json       (bug metadata + messages)
+   +-- bug-<id>.json            (bug metadata + messages)
    +-- attachments/
-   |   +-- <files>...      (downloaded attachments)
-   +-- plan.json           (from planning phase)
-   +-- result.json         (from execution phase)
-   +-- reproducer.sh       (extracted script)
+   |   +-- <files>...           (downloaded attachments)
+   +-- planning-prompt.html     (planning prompt for inspection)
+   +-- plan.json                (from planning phase)
+   +-- execution-prompt.html    (execution prompt for inspection)
+   +-- result.json              (from execution phase)
+   +-- reproducer.sh            (extracted script)
 ```
 
 ## Dependencies

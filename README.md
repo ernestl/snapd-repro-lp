@@ -60,7 +60,7 @@ export OPENROUTER_MODEL="anthropic/claude-sonnet-4"
 cat bug-1662786/plan.json
 
 # Execute the plan in an LXD container
-./snapd-repro-lp exec bug-1662786/plan.json
+./snapd-repro-lp exec 1662786
 ```
 
 ### Example output
@@ -72,11 +72,15 @@ URL: https://bugs.launchpad.net/snapd/+bug/1662786
 Tags: [snapd-snap]
 Messages: 5
 Attachments: 0
+Saved bug data to bug-1662786/bug-1662786.json
+Saved planning prompt to bug-1662786/planning-prompt.html
 
 Planning reproduction (model: anthropic/claude-sonnet-4)...
-[1/20] Waiting for LLM response...
-[1/20] Tool: report_plan
-[1/20] Agent stopped by report_plan
+[1/60] Waiting for LLM response...
+[1/60] Tool: report_plan
+  args: {"ubuntu_version":"24.04","instance_type":"container",...}
+  result: {"status":"ok"}
+[1/60] Agent stopped by report_plan
 
 === Reproduction Plan ===
 Ubuntu version: 24.04
@@ -84,10 +88,10 @@ Steps: 10
   1. Check snap version
      $ snap version
   ...
-Plan saved to bug-1662786/plan.json
+Saved plan to bug-1662786/plan.json
 
 Run the plan with:
-  snapd-repro-lp exec bug-1662786/plan.json
+  snapd-repro-lp exec 1662786
 ```
 
 ## Options
@@ -95,8 +99,27 @@ Run the plan with:
 ```
 --model string    LLM model via OpenRouter (default "anthropic/claude-sonnet-4")
                   Can also be set via OPENROUTER_MODEL environment variable.
---max-iter int    Maximum agent iterations (default 20)
+--max-iter int    Maximum agent iterations (default 60)
 -v, --verbose     Show detailed LLM debug output
+```
+
+**plan flags:**
+```
+-o, --output-dir string   Directory to write output (default: current directory)
+-f, --force               Overwrite existing bug directory without prompting
+```
+
+**exec flags:**
+```
+-o, --output-dir string   Directory containing bug output (default: current directory)
+    --ubuntu string       Override the Ubuntu version from the plan (e.g. 22.04)
+```
+
+**reproduce flags:**
+```
+-o, --output-dir string   Directory to write output (default: current directory)
+-f, --force               Overwrite existing bug directory without prompting
+    --ubuntu string       Override the Ubuntu version from the plan (e.g. 22.04)
 ```
 
 See `DESIGN.md` for architecture details.
