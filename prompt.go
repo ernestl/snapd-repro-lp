@@ -120,7 +120,7 @@ func writeSnapdKnowledge(b *strings.Builder) {
 - Common debug: "snap debug state /var/lib/snapd/state.json".
 - If a snap refresh is stuck, check "snap changes" and "snap change <id>" for the stuck change.
 - To simulate a narrow terminal (e.g., for output-formatting bugs), use COLUMNS=80 before the command. Do NOT use stty cols — it requires a TTY that lxc exec does not provide.
-- Reproduction environments default to LXD virtual machines. VMs support full systemd, all snaps, and nested LXD. Containers have limited systemd and cannot run snaps that require specific privileges.
+- Reproduction environments use LXD virtual machines. VMs support full systemd, all snaps, and nested LXD. If a container is needed, launch one inside the VM using nested LXD.
 
 `)
 }
@@ -128,12 +128,17 @@ func writeSnapdKnowledge(b *strings.Builder) {
 // --- Planning prompt ---
 
 // BuildPlanningPrompt constructs the system prompt for the planning
-// phase. The planning LLM analyzes the bug report and attachments to
-// produce a structured reproduction plan.
-func BuildPlanningPrompt(bug *Bug, skills *SkillIndex) string {
+// phase. The planning LLM analyzes the bug report and attachments,
+// and can run commands inside a pre-launched VM to investigate.
+func BuildPlanningPrompt(bug *Bug, instanceName string, skills *SkillIndex) string {
 	var b strings.Builder
 
 	b.WriteString(`You are an expert Ubuntu/snapd bug analysis agent. Your goal is to analyze a Launchpad bug report and produce a structured plan to REPRODUCE THE ORIGINAL BUG.
+
+## Environment
+- You have access to an LXD VM named "` + instanceName + `" running Ubuntu ` + defaultUbuntuVersion + `.
+- Use the run_command tool to execute investigative commands inside the VM (e.g., inspect attached state files, check package versions, test preliminary hypotheses).
+- The VM is for INVESTIGATION ONLY during planning. The execution phase will use it (or a fresh VM if a different Ubuntu version is needed).
 
 ## Critical: Reproduce the Bug, Not the Fix
 - Your goal is to reproduce the ORIGINAL BUG — trigger the broken behavior the reporter described.
@@ -145,14 +150,16 @@ func BuildPlanningPrompt(bug *Bug, skills *SkillIndex) string {
 
 ## Instructions
 1. Read the bug report carefully. Understand what the reporter observed and what conditions trigger the bug.
-2. If there are attachments (log files, configs, etc.), use the read_file tool to inspect them.
-3. Check the available skills below. Use describe_skill to get a summary, and load_skill to load detailed debugging commands relevant to the bug.
-4. Determine which Ubuntu version to use based on the bug tags, description, or comments. Use the codename mapping table below.
-5. Identify the buggy version and fixed version (if mentioned in the bug report) and note them in your plan.
-6. Plan a step-by-step reproduction strategy using shell commands that trigger the BROKEN behavior.
-7. Call report_plan with your structured plan. Do NOT ask for confirmation — call the tool directly.
+2. If there are attachments (log files, configs, state.json, etc.), use the read_file tool to inspect them. For complex state files, you can also copy them into the VM and use run_command to interrogate them (e.g., "snap debug state state.json").
+3. Use run_command to investigate inside the VM: check package versions, explore snap state, test commands, or verify assumptions about the environment.
+4. Check the available skills below. Use describe_skill to get a summary, and load_skill to load detailed debugging commands relevant to the bug.
+5. Determine which Ubuntu version to use based on the bug tags, description, or comments. Use the codename mapping table below.
+6. Identify the buggy version and fixed version (if mentioned in the bug report) and note them in your plan.
+7. Plan a step-by-step reproduction strategy using shell commands that trigger the BROKEN behavior.
+8. Call report_plan with your structured plan. Do NOT ask for confirmation — call the tool directly.
 
 ## Tools Available
+- **run_command**: Execute a shell command inside the LXD VM for investigation (checking versions, inspecting state, testing commands).
 - **read_file**: Read an attachment file from the bug directory. Use this to inspect log files, config files, or any other attachments.
 - **describe_skill**: Get a short description of a debugging skill to check its relevance before loading.
 - **load_skill**: Load the full content of a debugging skill with detailed commands and workflows.
@@ -160,7 +167,7 @@ func BuildPlanningPrompt(bug *Bug, skills *SkillIndex) string {
 
 ## Important Guidelines
 - Each step should have a clear description of what it does and why.
-- Each step should have a concrete shell command that can be run in an LXD container as root.
+- Each step should have a concrete shell command that can be run in an LXD VM as root.
 - Always include an "apt-get update" step before installing packages.
 - Use "DEBIAN_FRONTEND=noninteractive apt-get install -y ..." for unattended installs.
 - If the bug involves a specific snap, include a step to install it.
@@ -168,8 +175,7 @@ func BuildPlanningPrompt(bug *Bug, skills *SkillIndex) string {
 - If the bug cannot be reproduced (requires specific hardware, closed-source components, etc.), still provide a best-effort plan and note the limitations in expected_result.
 - List all attachments you reviewed in the attachments_reviewed field.
 - Commands run via lxc exec without a pseudo-TTY. Avoid commands that require a TTY (e.g., stty, dialog, interactive prompts). To simulate terminal width, set COLUMNS (e.g., COLUMNS=80 snap list).
-- Some snaps cannot run inside unprivileged LXD containers (e.g., lxd, multipass). Prefer simpler snaps that work in any container.
-- Prefer LXD virtual machines (set instance_type to "vm") for reproduction. Use containers (instance_type "container") only when the bug is specifically about behavior inside a container; in that case the plan should include steps to install and configure LXD inside the VM, then launch a nested container within it.
+- Some snaps cannot run inside unprivileged LXD containers (e.g., lxd, multipass). Prefer LXD virtual machines (set instance_type to "vm") for reproduction. Use containers (instance_type "container") only when the bug is specifically about behavior inside a container; in that case the plan should include steps to install and configure LXD inside the VM, then launch a nested container within it.
 - NEVER ask the user for permission or confirmation. Always call report_plan directly when your plan is ready.
 
 `)
@@ -209,25 +215,12 @@ func BuildPlanningUserMessage(bug *Bug) string {
 // BuildExecutionPrompt constructs the system prompt for the execution
 // phase. The execution LLM follows the plan in an LXD instance.
 func BuildExecutionPrompt(plan *ReproPlan, instanceName string, skills *SkillIndex) string {
-	instanceType := plan.InstanceType
-	if instanceType == "" {
-		instanceType = "vm"
-	}
-	instanceKind := "VM"
-	if instanceType == "container" {
-		instanceKind = "container"
-	}
-
 	var b strings.Builder
 
-	b.WriteString("You are an expert Ubuntu/snapd bug reproduction agent. Your goal is to execute a reproduction plan inside an LXD " + instanceKind + " and trigger the ORIGINAL BUG — the broken behavior described in the bug report.\n\n")
+	b.WriteString("You are an expert Ubuntu/snapd bug reproduction agent. Your goal is to execute a reproduction plan inside an LXD VM and trigger the ORIGINAL BUG — the broken behavior described in the bug report.\n\n")
 	b.WriteString("## Environment\n")
-	b.WriteString("- You are operating inside an LXD " + instanceKind + " named \"" + instanceName + "\".\n")
-	if instanceType == "vm" {
-		b.WriteString("- This is a virtual machine, which supports full systemd, all snaps, and nested LXD. You can install and use the lxd snap inside this VM if the plan requires launching nested containers.\n")
-	} else {
-		b.WriteString("- This is a container with limited systemd. Some snaps (e.g., lxd, multipass) cannot run inside containers.\n")
-	}
+	b.WriteString("- You are operating inside an LXD VM named \"" + instanceName + "\".\n")
+	b.WriteString("- This is a virtual machine, which supports full systemd, all snaps, and nested LXD. You can install and use the lxd snap inside this VM if the plan requires launching nested containers.\n")
 	b.WriteString(`- The instance runs Ubuntu ` + plan.UbuntuVersion + ` and has network access.
 - You execute commands via the run_command tool. All commands run as root.
 

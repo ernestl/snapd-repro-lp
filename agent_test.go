@@ -125,18 +125,18 @@ func TestAgentSingleToolCallThenReport(t *testing.T) {
 	if !strings.Contains(logOutput, "[1/10] Waiting for LLM response") {
 		t.Errorf("log missing iteration 1 progress marker")
 	}
-	if !strings.Contains(logOutput, "Tool: run_command") {
-		t.Errorf("log missing run_command tool progress")
+	if !strings.Contains(logOutput, "run_command: snap version") {
+		t.Errorf("log missing run_command summary, got: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, "Agent stopped by report_result") {
+	if !strings.Contains(logOutput, "LLM reported result") {
 		t.Errorf("log missing stop message")
 	}
-	// Check log output includes args and results (always visible).
-	if !strings.Contains(logOutput, "args:") {
-		t.Errorf("log missing tool args output")
+	// Check log output includes request and output (verbose only).
+	if !strings.Contains(logOutput, "request:") {
+		t.Errorf("log missing tool request output")
 	}
-	if !strings.Contains(logOutput, "result:") {
-		t.Errorf("log missing tool result output")
+	if !strings.Contains(logOutput, "output:") {
+		t.Errorf("log missing tool output")
 	}
 }
 

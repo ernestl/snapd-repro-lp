@@ -60,6 +60,9 @@ func TestRunCommandSuccess(t *testing.T) {
 	if !strings.Contains(result.Output, "core22") {
 		t.Errorf("Output = %q, want to contain 'core22'", result.Output)
 	}
+	if result.Summary != "snap list" {
+		t.Errorf("Summary = %q, want %q", result.Summary, "snap list")
+	}
 	// No exit code line for success.
 	if strings.Contains(result.Output, "[exit code:") {
 		t.Errorf("Output should not contain exit code for success")
@@ -180,6 +183,9 @@ func TestReportResultSuccess(t *testing.T) {
 	}
 	if !result.StopAgent {
 		t.Error("StopAgent should be true")
+	}
+	if result.StopMessage != "LLM reported result" {
+		t.Errorf("StopMessage = %q, want %q", result.StopMessage, "LLM reported result")
 	}
 	if tool.Result == nil {
 		t.Fatal("Result should be set")
@@ -303,6 +309,9 @@ func TestReadFileSuccess(t *testing.T) {
 	if result.StopAgent {
 		t.Error("StopAgent should be false")
 	}
+	if result.Summary != "journal.log" {
+		t.Errorf("Summary = %q, want %q", result.Summary, "journal.log")
+	}
 }
 
 func TestReadFileNotFound(t *testing.T) {
@@ -410,6 +419,9 @@ func TestReportPlanSuccess(t *testing.T) {
 	if !result.StopAgent {
 		t.Error("StopAgent should be true")
 	}
+	if result.StopMessage != "LLM reported plan" {
+		t.Errorf("StopMessage = %q, want %q", result.StopMessage, "LLM reported plan")
+	}
 	if tool.Plan == nil {
 		t.Fatal("Plan should be set")
 	}
@@ -494,5 +506,30 @@ func TestReportPlanDefinition(t *testing.T) {
 	}
 	if def.Function.Name != "report_plan" {
 		t.Errorf("Function.Name = %q, want %q", def.Function.Name, "report_plan")
+	}
+}
+
+func TestSummariseCmd(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"snap list", "snap list"},
+		{"COLUMNS=80 snap list", "snap list"},
+		{"COLUMNS=80 snap list 2>&1 | cat -A | head -10", "snap list"},
+		{"DEBIAN_FRONTEND=noninteractive apt-get install -y snapd", "apt-get install -y snapd"},
+		{"echo hello > /dev/null", "echo hello > /dev/null"}, // > is not stripped (only specific redirects)
+		{"snap version 2>&1", "snap version"},
+		{"cat /var/log/syslog | grep snapd | tail -20", "cat /var/log/syslog"},
+		{"A=1 B=2 some-cmd --flag", "some-cmd --flag"},
+		{"echo hello\necho world", "echo hello"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		got := summariseCmd(tt.input)
+		if got != tt.want {
+			t.Errorf("summariseCmd(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }

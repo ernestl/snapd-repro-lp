@@ -14,9 +14,11 @@ func TestColorHelpers(t *testing.T) {
 		{"bold", bold, colorBold},
 		{"dim", dim, colorDim},
 		{"green", green, colorGreen},
+		{"blue", blue, colorBlue},
 		{"red", red, colorRed},
 		{"yellow", yellow, colorYellow},
 		{"cyan", cyan, colorCyan},
+		{"boldCyan", boldCyan, colorBold + colorCyan},
 	}
 
 	for _, tt := range tests {

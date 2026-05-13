@@ -170,10 +170,12 @@ func TestBuildPlanningPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildPlanningPrompt(bug, nil)
+	prompt := BuildPlanningPrompt(bug, "test-instance", nil)
 
 	checks := []string{
 		"expert Ubuntu/snapd bug analysis agent",
+		"test-instance",
+		"run_command",
 		"read_file",
 		"report_plan",
 		"Bug ID:** 1662786",
@@ -203,7 +205,7 @@ func TestBuildPlanningPromptNoAttachments(t *testing.T) {
 		Description: "No attachments.",
 	}
 
-	prompt := BuildPlanningPrompt(bug, nil)
+	prompt := BuildPlanningPrompt(bug, "test-instance", nil)
 
 	if strings.Contains(prompt, "### Attachments") {
 		t.Error("should not have Attachments section when empty")
@@ -297,27 +299,26 @@ func TestBuildExecutionPrompt(t *testing.T) {
 	}
 }
 
-func TestBuildExecutionPromptContainer(t *testing.T) {
+func TestBuildExecutionPromptAlwaysVM(t *testing.T) {
 	plan := &ReproPlan{
-		BugID:         1662786,
-		Title:         "container-specific bug",
-		UbuntuVersion: "24.04",
-		InstanceType:  "container",
-		Steps:         []PlanStep{{Description: "test", Command: "echo test"}},
+		BugID:          1662786,
+		Title:          "some bug",
+		UbuntuVersion:  "24.04",
+		InstanceType:   "container", // even if plan says container, prompt should say VM
+		Steps:          []PlanStep{{Description: "test", Command: "echo test"}},
 		ExpectedResult: "something happens",
 	}
 
 	prompt := BuildExecutionPrompt(plan, "snapd-repro-abc", nil)
 
-	if !strings.Contains(prompt, "LXD container") {
-		t.Error("execution prompt should mention 'LXD container' for container instance type")
+	if !strings.Contains(prompt, "LXD VM") {
+		t.Error("execution prompt should always mention 'LXD VM'")
 	}
-	if !strings.Contains(prompt, "limited systemd") {
-		t.Error("execution prompt should mention limited systemd for container instance type")
+	if !strings.Contains(prompt, "virtual machine") {
+		t.Error("execution prompt should mention 'virtual machine'")
 	}
-	// The Environment section should say "LXD container", not "LXD VM".
-	if !strings.Contains(prompt, "You are operating inside an LXD container") {
-		t.Error("Environment section should say 'LXD container'")
+	if !strings.Contains(prompt, "nested LXD") {
+		t.Error("execution prompt should mention nested LXD for container needs")
 	}
 }
 

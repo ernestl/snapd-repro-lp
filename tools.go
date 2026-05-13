@@ -16,6 +16,12 @@ type ToolResult struct {
 	// StopAgent indicates the agent loop should stop (set by
 	// report_result).
 	StopAgent bool
+	// StopMessage is an optional human-readable message displayed
+	// when StopAgent is true (e.g. "LLM reported plan").
+	StopMessage string
+	// Summary is a concise description of what the tool did,
+	// displayed in the progress line (e.g. "apt-get update").
+	Summary string
 }
 
 // Tool is the interface that agent tools must implement.
@@ -94,7 +100,81 @@ func (t *RunCommandTool) Execute(ctx context.Context, argsJSON string) (*ToolRes
 		output += fmt.Sprintf("\n[exit code: %d]", result.ExitCode)
 	}
 
-	return &ToolResult{Output: output}, nil
+	return &ToolResult{Output: output, Summary: summariseCmd(args.Command)}, nil
+}
+
+// summariseCmd extracts a concise summary from a shell command by
+// stripping leading environment variable assignments, truncating at the
+// first pipe, and removing trailing redirections.
+func summariseCmd(cmd string) string {
+	// Take only the first line.
+	if i := strings.IndexByte(cmd, '\n'); i >= 0 {
+		cmd = cmd[:i]
+	}
+	cmd = strings.TrimSpace(cmd)
+
+	// Truncate at the first pipe.
+	if i := strings.IndexByte(cmd, '|'); i >= 0 {
+		cmd = strings.TrimSpace(cmd[:i])
+	}
+
+	// Strip trailing redirections (e.g. "2>&1", "> /dev/null").
+	for {
+		trimmed := strings.TrimRight(cmd, " ")
+		changed := false
+		for _, suffix := range []string{"2>&1", ">&2", ">/dev/null", "2>/dev/null"} {
+			if strings.HasSuffix(trimmed, suffix) {
+				trimmed = strings.TrimSpace(trimmed[:len(trimmed)-len(suffix)])
+				changed = true
+			}
+		}
+		if !changed {
+			cmd = trimmed
+			break
+		}
+		cmd = trimmed
+	}
+
+	// Strip leading VAR=value assignments.
+	for {
+		// Match KEY=value at the start (no spaces in value, or quoted).
+		rest := strings.TrimSpace(cmd)
+		eqIdx := strings.IndexByte(rest, '=')
+		if eqIdx < 0 {
+			break
+		}
+		// The part before '=' must look like a variable name (no spaces).
+		key := rest[:eqIdx]
+		if strings.ContainsAny(key, " \t") || key == "" {
+			break
+		}
+		// Skip the value: either quoted or until next space.
+		after := rest[eqIdx+1:]
+		var skip int
+		if len(after) > 0 && (after[0] == '"' || after[0] == '\'') {
+			// Find matching close quote.
+			q := after[0]
+			end := strings.IndexByte(after[1:], q)
+			if end < 0 {
+				break // unmatched quote, stop stripping
+			}
+			skip = end + 2
+		} else {
+			// Skip until space.
+			spIdx := strings.IndexAny(after, " \t")
+			if spIdx < 0 {
+				break // no command after value
+			}
+			skip = spIdx
+		}
+		cmd = strings.TrimSpace(after[skip:])
+	}
+
+	const maxLen = 60
+	if len(cmd) > maxLen {
+		return cmd[:maxLen] + "..."
+	}
+	return cmd
 }
 
 // --- report_result tool ---
@@ -169,8 +249,9 @@ func (t *ReportResultTool) Execute(_ context.Context, argsJSON string) (*ToolRes
 	}
 
 	return &ToolResult{
-		Output:    "Result recorded. Agent session ending.",
-		StopAgent: true,
+		Output:      "Result recorded. Agent session ending.",
+		StopAgent:   true,
+		StopMessage: "LLM reported result",
 	}, nil
 }
 
@@ -259,7 +340,7 @@ func (t *ReadFileTool) Execute(_ context.Context, argsJSON string) (*ToolResult,
 				fmt.Fprintf(&listing, "  %s%s\n", e.Name(), suffix)
 			}
 			fmt.Fprintf(&listing, "\n%d entries", len(entries))
-			return &ToolResult{Output: listing.String()}, nil
+			return &ToolResult{Output: listing.String(), Summary: args.Path}, nil
 		}
 		return nil, fmt.Errorf("reading file: %w", err)
 	}
@@ -270,7 +351,7 @@ func (t *ReadFileTool) Execute(_ context.Context, argsJSON string) (*ToolResult,
 		content = content[:maxFileSize] + "\n...[truncated]"
 	}
 
-	return &ToolResult{Output: content}, nil
+	return &ToolResult{Output: content, Summary: args.Path}, nil
 }
 
 // --- report_plan tool ---
@@ -384,8 +465,9 @@ func (t *ReportPlanTool) Execute(_ context.Context, argsJSON string) (*ToolResul
 	}
 
 	return &ToolResult{
-		Output:    "Plan recorded. Planning session ending.",
-		StopAgent: true,
+		Output:      "Plan recorded. Planning session ending.",
+		StopAgent:   true,
+		StopMessage: "LLM reported plan",
 	}, nil
 }
 

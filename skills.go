@@ -146,7 +146,7 @@ func (t *DescribeSkillTool) Execute(_ context.Context, argsJSON string) (*ToolRe
 		return &ToolResult{Output: fmt.Sprintf("error: %v", err)}, nil
 	}
 
-	return &ToolResult{Output: summary}, nil
+	return &ToolResult{Output: summary, Summary: args.Name}, nil
 }
 
 // --- load_skill tool ---
@@ -203,5 +203,5 @@ func (t *LoadSkillTool) Execute(_ context.Context, argsJSON string) (*ToolResult
 		return &ToolResult{Output: fmt.Sprintf("error: %v", err)}, nil
 	}
 
-	return &ToolResult{Output: content}, nil
+	return &ToolResult{Output: content, Summary: args.Name}, nil
 }

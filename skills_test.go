@@ -353,7 +353,7 @@ func TestBuildPlanningPromptWithSkills(t *testing.T) {
 		Description: "Refresh hangs.",
 	}
 
-	prompt := BuildPlanningPrompt(bug, idx)
+	prompt := BuildPlanningPrompt(bug, "test-instance", idx)
 
 	checks := []string{
 		"Available Skills",

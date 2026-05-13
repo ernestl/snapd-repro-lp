@@ -13,6 +13,7 @@ type AgentConfig struct {
 	MaxIterations int
 	Verbose       bool
 	Output        io.Writer // For progress/status messages. Defaults to os.Stderr.
+	Prefix        string    // Prefix prepended to every progress line (e.g. "  " for indentation).
 }
 
 // AgentResult holds the outcome of an agent run.
@@ -41,6 +42,7 @@ type Agent struct {
 	executor *ToolExecutor
 	config   AgentConfig
 	output   io.Writer
+	prefix   string
 
 	// TotalUsage tracks cumulative token usage across all iterations.
 	TotalUsage Usage
@@ -57,6 +59,7 @@ func NewAgent(llm *LLMClient, executor *ToolExecutor, config AgentConfig) *Agent
 		executor: executor,
 		config:   config,
 		output:   out,
+		prefix:   config.Prefix,
 	}
 }
 
@@ -111,12 +114,9 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 		// If the LLM returned tool calls, execute them.
 		if choice.FinishReason == "tool_calls" || len(choice.Message.ToolCalls) > 0 {
 			for _, tc := range choice.Message.ToolCalls {
-				a.progressf("[%d/%d] Tool: %s", i+1, maxIter, tc.Function.Name)
-				a.progressf("  %s", dim("args: "+truncate(tc.Function.Arguments, 500)))
-
 				result, err := a.executor.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 				if err != nil {
-					a.progressf("[%d/%d] Tool error (%s): %s", i+1, maxIter, tc.Function.Name, err.Error())
+					a.progressf("[%d/%d] %s", i+1, maxIter, yellow("error: "+tc.Function.Name+": "+err.Error()))
 					// Feed the error back to the LLM as a tool result message,
 					// so it can adapt and try a different approach.
 					errorContent := fmt.Sprintf("error executing tool %s: %s", tc.Function.Name, err.Error())
@@ -127,12 +127,25 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 				// Append the tool result message.
 				messages = append(messages, ToolResultMessage(tc.ID, tc.Function.Name, result.Output))
 
-				a.progressf("  %s", dim("result: "+truncate(result.Output, 500)))
-
 				if result.StopAgent {
-					a.progressf("[%d/%d] %s", i+1, maxIter, bold("Agent stopped by "+tc.Function.Name))
+					stopMsg := tc.Function.Name + " → done"
+					if result.StopMessage != "" {
+						stopMsg = result.StopMessage
+					}
+					a.progressf("[%d/%d] %s", i+1, maxIter, cyan(stopMsg))
+					a.verbosef("  %s", dim("request: "+tc.Function.Arguments))
+					a.verbosef("  %s", dim("output: "+result.Output))
 					return &AgentResult{StoppedByTool: tc.Function.Name}, nil
 				}
+
+				// Non-stop tool: print tool name and summary.
+				toolLine := tc.Function.Name
+				if result.Summary != "" {
+					toolLine += ": " + result.Summary
+				}
+				a.progressf("[%d/%d] %s", i+1, maxIter, cyan(toolLine))
+				a.verbosef("  %s", dim("request: "+tc.Function.Arguments))
+				a.verbosef("  %s", dim("output: "+result.Output))
 			}
 			continue
 		}
@@ -144,7 +157,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 			if choice.Message.Content != nil {
 				content = *choice.Message.Content
 			}
-			a.progressf("[%d/%d] LLM stopped with text response", i+1, maxIter)
+			a.progressf("[%d/%d] %s", i+1, maxIter, cyan("LLM stopped with text response"))
 			return &AgentResult{LastMessage: content}, nil
 		}
 	}
@@ -217,13 +230,20 @@ func summariseRecentActivity(messages []ChatMessage) string {
 
 // progressf always prints progress messages to the output writer.
 func (a *Agent) progressf(format string, args ...interface{}) {
-	_, _ = fmt.Fprintf(a.output, format+"\n", args...)
+	_, _ = fmt.Fprintf(a.output, a.prefix+format+"\n", args...)
+}
+
+// verbosef prints detail messages only when verbose mode is enabled.
+func (a *Agent) verbosef(format string, args ...interface{}) {
+	if a.config.Verbose {
+		_, _ = fmt.Fprintf(a.output, a.prefix+format+"\n", args...)
+	}
 }
 
 // logf prints debug messages only when verbose mode is enabled.
 func (a *Agent) logf(format string, args ...interface{}) {
 	if a.config.Verbose {
-		_, _ = fmt.Fprintf(a.output, "[agent] "+format+"\n", args...)
+		_, _ = fmt.Fprintf(a.output, a.prefix+"[agent] "+format+"\n", args...)
 	}
 }
 
