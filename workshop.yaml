@@ -4,6 +4,7 @@ sdks:
   - name: go
     channel: latest/stable
   - name: project-tools
+  - name: opencode
 actions:
   lint: |
     GOTOOLCHAIN=auto golangci-lint run
