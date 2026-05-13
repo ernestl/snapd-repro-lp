@@ -535,7 +535,7 @@ var testLxdExecCmd = &cobra.Command{
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Executing in %s: %s\n", containerName, command)
 		}
 
-		result, err := container.Exec(command)
+		result, err := container.Exec(context.Background(), command)
 		if err != nil {
 			return fmt.Errorf("exec failed: %w", err)
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ func (m *mockContainer) Launch(image string) error {
 	return nil
 }
 
-func (m *mockContainer) Exec(command string) (*ExecResult, error) {
+func (m *mockContainer) Exec(_ context.Context, command string) (*ExecResult, error) {
 	if m.execFunc != nil {
 		return m.execFunc(command)
 	}
@@ -49,7 +50,7 @@ func TestRunCommandSuccess(t *testing.T) {
 	}
 
 	tool := NewRunCommandTool(mc)
-	result, err := tool.Execute(`{"command": "snap list"}`)
+	result, err := tool.Execute(context.Background(),`{"command": "snap list"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestRunCommandNonZeroExit(t *testing.T) {
 	}
 
 	tool := NewRunCommandTool(mc)
-	result, err := tool.Execute(`{"command": "nonexistent"}`)
+	result, err := tool.Execute(context.Background(),`{"command": "nonexistent"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +96,7 @@ func TestRunCommandExecError(t *testing.T) {
 	}
 
 	tool := NewRunCommandTool(mc)
-	_, err := tool.Execute(`{"command": "ls"}`)
+	_, err := tool.Execute(context.Background(),`{"command": "ls"}`)
 	if err == nil {
 		t.Fatal("expected error when container exec fails")
 	}
@@ -108,7 +109,7 @@ func TestRunCommandEmptyCommand(t *testing.T) {
 	mc := &mockContainer{name: "test-container"}
 	tool := NewRunCommandTool(mc)
 
-	result, err := tool.Execute(`{"command": ""}`)
+	result, err := tool.Execute(context.Background(),`{"command": ""}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestRunCommandInvalidJSON(t *testing.T) {
 	mc := &mockContainer{name: "test-container"}
 	tool := NewRunCommandTool(mc)
 
-	_, err := tool.Execute(`not json`)
+	_, err := tool.Execute(context.Background(),`not json`)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -138,7 +139,7 @@ func TestRunCommandTruncation(t *testing.T) {
 	}
 
 	tool := NewRunCommandTool(mc)
-	result, err := tool.Execute(`{"command": "big"}`)
+	result, err := tool.Execute(context.Background(),`{"command": "big"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -169,7 +170,7 @@ func TestRunCommandDefinition(t *testing.T) {
 
 func TestReportResultSuccess(t *testing.T) {
 	tool := NewReportResultTool()
-	result, err := tool.Execute(`{
+	result, err := tool.Execute(context.Background(),`{
 		"reproduced": true,
 		"explanation": "Bug reproduced by installing snap X and doing Y.",
 		"script": "#!/bin/bash\nsnap install X\ndo Y"
@@ -196,7 +197,7 @@ func TestReportResultSuccess(t *testing.T) {
 
 func TestReportResultNotReproduced(t *testing.T) {
 	tool := NewReportResultTool()
-	result, err := tool.Execute(`{
+	result, err := tool.Execute(context.Background(),`{
 		"reproduced": false,
 		"explanation": "Could not reproduce. Needs specific hardware.",
 		"script": "#!/bin/bash\necho 'best attempt'"
@@ -214,7 +215,7 @@ func TestReportResultNotReproduced(t *testing.T) {
 
 func TestReportResultInvalidJSON(t *testing.T) {
 	tool := NewReportResultTool()
-	_, err := tool.Execute(`not json`)
+	_, err := tool.Execute(context.Background(),`not json`)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -254,7 +255,7 @@ func TestToolExecutorDispatch(t *testing.T) {
 	}
 
 	// Dispatch run_command.
-	result, err := executor.Execute("run_command", `{"command": "echo hello"}`)
+	result, err := executor.Execute(context.Background(),"run_command", `{"command": "echo hello"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -263,7 +264,7 @@ func TestToolExecutorDispatch(t *testing.T) {
 	}
 
 	// Dispatch report_result.
-	result, err = executor.Execute("report_result", `{"reproduced": true, "explanation": "done", "script": "echo done"}`)
+	result, err = executor.Execute(context.Background(),"report_result", `{"reproduced": true, "explanation": "done", "script": "echo done"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -274,7 +275,7 @@ func TestToolExecutorDispatch(t *testing.T) {
 
 func TestToolExecutorUnknownTool(t *testing.T) {
 	executor := NewToolExecutor()
-	result, err := executor.Execute("nonexistent", `{}`)
+	result, err := executor.Execute(context.Background(),"nonexistent", `{}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -292,7 +293,7 @@ func TestReadFileSuccess(t *testing.T) {
 	}
 
 	tool := NewReadFileTool(dir)
-	result, err := tool.Execute(`{"path": "journal.log"}`)
+	result, err := tool.Execute(context.Background(),`{"path": "journal.log"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -308,7 +309,7 @@ func TestReadFileNotFound(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewReadFileTool(dir)
 
-	result, err := tool.Execute(`{"path": "nonexistent.txt"}`)
+	result, err := tool.Execute(context.Background(),`{"path": "nonexistent.txt"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -321,7 +322,7 @@ func TestReadFilePathEscape(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewReadFileTool(dir)
 
-	result, err := tool.Execute(`{"path": "../../../etc/passwd"}`)
+	result, err := tool.Execute(context.Background(),`{"path": "../../../etc/passwd"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -334,7 +335,7 @@ func TestReadFileEmptyPath(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewReadFileTool(dir)
 
-	result, err := tool.Execute(`{"path": ""}`)
+	result, err := tool.Execute(context.Background(),`{"path": ""}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -351,7 +352,7 @@ func TestReadFileTruncation(t *testing.T) {
 	}
 
 	tool := NewReadFileTool(dir)
-	result, err := tool.Execute(`{"path": "big.log"}`)
+	result, err := tool.Execute(context.Background(),`{"path": "big.log"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -367,7 +368,7 @@ func TestReadFileInvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewReadFileTool(dir)
 
-	_, err := tool.Execute(`not json`)
+	_, err := tool.Execute(context.Background(),`not json`)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -393,7 +394,7 @@ func TestReadFileDefinition(t *testing.T) {
 
 func TestReportPlanSuccess(t *testing.T) {
 	tool := NewReportPlanTool()
-	result, err := tool.Execute(`{
+	result, err := tool.Execute(context.Background(),`{
 		"ubuntu_version": "24.04",
 		"steps": [
 			{"description": "Install snapd", "command": "apt-get install -y snapd"},
@@ -430,7 +431,7 @@ func TestReportPlanSuccess(t *testing.T) {
 
 func TestReportPlanNoAttachments(t *testing.T) {
 	tool := NewReportPlanTool()
-	result, err := tool.Execute(`{
+	result, err := tool.Execute(context.Background(),`{
 		"ubuntu_version": "22.04",
 		"steps": [{"description": "test", "command": "echo test"}],
 		"expected_result": "test passes"
@@ -451,7 +452,7 @@ func TestReportPlanNoAttachments(t *testing.T) {
 
 func TestReportPlanInvalidJSON(t *testing.T) {
 	tool := NewReportPlanTool()
-	_, err := tool.Execute(`not json`)
+	_, err := tool.Execute(context.Background(),`not json`)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}

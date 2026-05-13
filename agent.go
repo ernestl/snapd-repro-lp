@@ -105,7 +105,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 				a.progressf("[%d/%d] Tool: %s", i+1, maxIter, tc.Function.Name)
 				a.progressf("  args: %s", truncate(tc.Function.Arguments, 500))
 
-				result, err := a.executor.Execute(tc.Function.Name, tc.Function.Arguments)
+				result, err := a.executor.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 				if err != nil {
 					return nil, fmt.Errorf("iteration %d: tool %s: %w", i+1, tc.Function.Name, err)
 				}
