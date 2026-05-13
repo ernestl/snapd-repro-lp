@@ -10,6 +10,18 @@ Purpose of the project is written out in README.md and DESIGN.md.
 
 Use the Go version specified in `go.mod`. Do not upgrade or change it without justification.
 
+## Workshop
+
+The project defines a [Workshop](https://github.com/canonical/workshop) environment
+(`workshop.yaml`). Use it for a reproducible dev setup with Go and project tools:
+
+```bash
+workshop launch
+workshop run -- build   # compile
+workshop run -- test    # run all tests
+workshop run -- lint    # run golangci-lint
+```
+
 ## Tests
 
 - Every new Go file must have a corresponding `_test.go` file with unit tests.
@@ -19,6 +31,8 @@ Use the Go version specified in `go.mod`. Do not upgrade or change it without ju
   or returns a non-nil value are not acceptable.
 - Run tests with:
       go test ./...
+  Or via workshop:
+      workshop run -- test
 - All tests must pass before submitting changes.
 
 ## Linter
@@ -26,6 +40,8 @@ Use the Go version specified in `go.mod`. Do not upgrade or change it without ju
 - Use `golangci-lint` for static analysis.
 - Run with:
       golangci-lint run
+  Or via workshop:
+      workshop run -- lint
 - All lint issues must be resolved before submitting changes.
 
 ## General Conventions
