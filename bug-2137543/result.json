@@ -1,5 +1,0 @@
-{
-  "reproduced": false,
-  "explanation": "Attempted to reproduce the bug by installing language-pack-de, snapd, and various test snaps to check the locale behavior of snapctl services. However, none of the snaps tested (test-snap-components-snapctl, prometheus, hello-world) provided a suitable context for testing snapctl services behavior. Unable to verify the locale-related output.",
-  "script": "DEBIAN_FRONTEND=noninteractive apt-get install -y language-pack-de\napt-get update\nDEBIAN_FRONTEND=noninteractive apt-get install -y snapd\nexport LANG=de_DE.UTF-8\nsnap install --edge test-snap-components-snapctl\nsnap run --shell test-snap-components-snapctl.test -c 'snapctl services'\n"
-}

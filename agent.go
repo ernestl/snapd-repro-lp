@@ -105,14 +105,14 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 
 		// Show LLM text content if present (may accompany tool calls).
 		if choice.Message.Content != nil && *choice.Message.Content != "" {
-			a.progressf("[%d/%d] LLM: %s", i+1, maxIter, truncate(*choice.Message.Content, 500))
+			a.progressf("[%d/%d] %s", i+1, maxIter, cyan("LLM: "+truncate(*choice.Message.Content, 500)))
 		}
 
 		// If the LLM returned tool calls, execute them.
 		if choice.FinishReason == "tool_calls" || len(choice.Message.ToolCalls) > 0 {
 			for _, tc := range choice.Message.ToolCalls {
 				a.progressf("[%d/%d] Tool: %s", i+1, maxIter, tc.Function.Name)
-				a.progressf("  args: %s", truncate(tc.Function.Arguments, 500))
+				a.progressf("  %s", dim("args: "+truncate(tc.Function.Arguments, 500)))
 
 				result, err := a.executor.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 				if err != nil {
@@ -127,10 +127,10 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 				// Append the tool result message.
 				messages = append(messages, ToolResultMessage(tc.ID, tc.Function.Name, result.Output))
 
-				a.progressf("  result: %s", truncate(result.Output, 500))
+				a.progressf("  %s", dim("result: "+truncate(result.Output, 500)))
 
 				if result.StopAgent {
-					a.progressf("[%d/%d] Agent stopped by %s", i+1, maxIter, tc.Function.Name)
+					a.progressf("[%d/%d] %s", i+1, maxIter, bold("Agent stopped by "+tc.Function.Name))
 					return &AgentResult{StoppedByTool: tc.Function.Name}, nil
 				}
 			}
@@ -149,7 +149,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 		}
 	}
 
-	a.progressf("[%d/%d] Agent reached max iterations without a result", maxIter, maxIter)
+	a.progressf("[%d/%d] %s", maxIter, maxIter, yellow("Agent reached max iterations without a result"))
 	return &AgentResult{
 		MaxIterationsReached: true,
 		RecentActivity:       summariseRecentActivity(messages),

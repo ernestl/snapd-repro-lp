@@ -131,8 +131,7 @@ func fetchAndPrepareBug(cmd *cobra.Command, bugRef string) (*Bug, string, error)
 	if err := os.WriteFile(outFile, data, 0644); err != nil {
 		return nil, "", fmt.Errorf("writing %s: %w", outFile, err)
 	}
-	absPath, _ := filepath.Abs(outFile)
-	_, _ = fmt.Fprintf(out, "Wrote %s\n", absPath)
+	_, _ = fmt.Fprintf(out, "Saved bug data to %s\n", green(fileHyperlink(outFile)))
 
 	return bug, bugDir, nil
 }
@@ -179,12 +178,12 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 	// Save prompt for inspection.
 	promptFile := filepath.Join(bugDir, "planning-prompt.html")
 	if err := SavePromptHTML(promptFile, fmt.Sprintf("Planning Prompt — Bug #%d", bug.ID), systemPrompt, userMessage); err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to save prompt HTML: %v\n", err)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", yellow(fmt.Sprintf("warning: failed to save prompt HTML: %v", err)))
 	} else {
-		_, _ = fmt.Fprintf(out, "Prompt saved to %s\n", fileHyperlink(promptFile))
+		_, _ = fmt.Fprintf(out, "Saved planning prompt to %s\n", green(fileHyperlink(promptFile)))
 	}
 
-	_, _ = fmt.Fprintf(out, "\nPlanning reproduction (model: %s)...\n", modelName)
+	_, _ = fmt.Fprintf(out, "\n%s\n", bold(fmt.Sprintf("Planning reproduction (model: %s)...", modelName)))
 	result, err := agent.Run(ctx, systemPrompt, userMessage)
 	if err != nil {
 		return nil, fmt.Errorf("planning agent failed: %w", err)
@@ -197,10 +196,11 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 		plan.Title = bug.Title
 		plan.ModelUsed = modelName
 
-		_, _ = fmt.Fprintf(out, "\nToken usage: %d prompt + %d completion = %d total\n",
-			agent.TotalUsage.PromptTokens,
-			agent.TotalUsage.CompletionTokens,
-			agent.TotalUsage.TotalTokens)
+		_, _ = fmt.Fprintf(out, "\n%s\n",
+			dim(fmt.Sprintf("Token usage: %d prompt + %d completion = %d total",
+				agent.TotalUsage.PromptTokens,
+				agent.TotalUsage.CompletionTokens,
+				agent.TotalUsage.TotalTokens)))
 
 		return plan, nil
 	}
@@ -247,7 +247,7 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 	defer func() {
 		_, _ = fmt.Fprintf(out, "Cleaning up %s %s...\n", instanceKind, instance.Name())
 		if delErr := instance.Delete(); delErr != nil {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to delete instance: %v\n", delErr)
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", yellow(fmt.Sprintf("warning: failed to delete instance: %v", delErr)))
 		}
 	}()
 
@@ -273,9 +273,9 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 	// Save prompt for inspection.
 	promptFile := filepath.Join(bugDir, "execution-prompt.html")
 	if err := SavePromptHTML(promptFile, fmt.Sprintf("Execution Prompt — Bug #%d", plan.BugID), systemPrompt, userMessage); err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to save prompt HTML: %v\n", err)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", yellow(fmt.Sprintf("warning: failed to save prompt HTML: %v", err)))
 	} else {
-		_, _ = fmt.Fprintf(out, "Prompt saved to %s\n", fileHyperlink(promptFile))
+		_, _ = fmt.Fprintf(out, "Saved execution prompt to %s\n", green(fileHyperlink(promptFile)))
 	}
 
 	_, _ = fmt.Fprintf(out, "Executing plan (model: %s, max iterations: %d)...\n", modelName, maxIterations)
@@ -315,11 +315,11 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 func saveExecutionResult(cmd *cobra.Command, result *ReproResult, usage *Usage, bugDir string) {
 	out := cmd.OutOrStdout()
 
-	_, _ = fmt.Fprintf(out, "\n=== Reproduction Result ===\n")
+	_, _ = fmt.Fprintf(out, "\n%s\n", bold("=== Reproduction Result ==="))
 	if result.Reproduced {
-		_, _ = fmt.Fprintf(out, "Status: REPRODUCED\n")
+		_, _ = fmt.Fprintf(out, "Status: %s\n", bold(red("REPRODUCED")))
 	} else {
-		_, _ = fmt.Fprintf(out, "Status: NOT REPRODUCED\n")
+		_, _ = fmt.Fprintf(out, "Status: %s\n", yellow("NOT REPRODUCED"))
 	}
 	_, _ = fmt.Fprintf(out, "\nExplanation:\n%s\n", result.Explanation)
 
@@ -328,23 +328,24 @@ func saveExecutionResult(cmd *cobra.Command, result *ReproResult, usage *Usage, 
 
 		scriptFile := filepath.Join(bugDir, "reproducer.sh")
 		if err := os.WriteFile(scriptFile, []byte(result.Script), 0755); err != nil {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to write script: %v\n", err)
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", yellow(fmt.Sprintf("warning: failed to write script: %v", err)))
 		} else {
-			_, _ = fmt.Fprintf(out, "\nScript saved to %s\n", scriptFile)
+			_, _ = fmt.Fprintf(out, "\nSaved reproducer script to %s\n", green(fileHyperlink(scriptFile)))
 		}
 	}
 
 	resultFile := filepath.Join(bugDir, "result.json")
 	resultData, _ := json.MarshalIndent(result, "", "  ")
 	if err := os.WriteFile(resultFile, resultData, 0644); err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to write result: %v\n", err)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", yellow(fmt.Sprintf("warning: failed to write result: %v", err)))
 	} else {
-		_, _ = fmt.Fprintf(out, "Result saved to %s\n", resultFile)
+		_, _ = fmt.Fprintf(out, "Saved result to %s\n", green(fileHyperlink(resultFile)))
 	}
 
 	if usage != nil {
-		_, _ = fmt.Fprintf(out, "\nToken usage: %d prompt + %d completion = %d total\n",
-			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+		_, _ = fmt.Fprintf(out, "\n%s\n",
+			dim(fmt.Sprintf("Token usage: %d prompt + %d completion = %d total",
+				usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)))
 	}
 }
 
@@ -381,7 +382,7 @@ Requires OPENROUTER_API_KEY to be set.`,
 		}
 
 		out := cmd.OutOrStdout()
-		_, _ = fmt.Fprintf(out, "\n=== Reproduction Plan ===\n")
+		_, _ = fmt.Fprintf(out, "\n%s\n", bold("=== Reproduction Plan ==="))
 		_, _ = fmt.Fprintf(out, "Ubuntu version: %s\n", plan.UbuntuVersion)
 		_, _ = fmt.Fprintf(out, "Steps: %d\n", len(plan.Steps))
 		for i, step := range plan.Steps {
@@ -389,9 +390,9 @@ Requires OPENROUTER_API_KEY to be set.`,
 			_, _ = fmt.Fprintf(out, "     $ %s\n", step.Command)
 		}
 		_, _ = fmt.Fprintf(out, "Expected: %s\n", plan.ExpectedResult)
-		_, _ = fmt.Fprintf(out, "\nPlan saved to %s\n", planFile)
+		_, _ = fmt.Fprintf(out, "\nSaved plan to %s\n", green(fileHyperlink(planFile)))
 		_, _ = fmt.Fprintf(out, "\nRun the plan with:\n")
-		_, _ = fmt.Fprintf(out, "  snapd-repro-lp exec %s\n", planFile)
+		_, _ = fmt.Fprintf(out, "  snapd-repro-lp exec %d\n", plan.BugID)
 
 		return nil
 	},
@@ -400,22 +401,34 @@ Requires OPENROUTER_API_KEY to be set.`,
 // --- exec command ---
 
 var execCmd = &cobra.Command{
-	Use:   "exec [plan-file]",
+	Use:   "exec [bug-ref]",
 	Short: "Execute a reproduction plan in an LXD container",
-	Long: `Read a plan.json file produced by the plan command, launch an LXD container
-with the specified Ubuntu version, and execute the reproduction steps.
+	Long: `Look up a plan.json produced by the plan command for the given bug, launch an
+LXD container with the specified Ubuntu version, and execute the reproduction
+steps. The bug reference can be a numeric ID or a Launchpad URL.
+
+The plan is expected at <output-dir>/bug-<ID>/plan.json.
 
 Requires OPENROUTER_API_KEY to be set.`,
-	Example: "  snapd-repro-lp exec bug-1662786/plan.json",
+	Example: "  snapd-repro-lp exec 2137543",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		planFile := args[0]
-		plan, err := LoadPlan(planFile)
+		bugID, err := parseBugRef(args[0])
 		if err != nil {
-			return fmt.Errorf("loading plan: %w", err)
+			return fmt.Errorf("invalid bug reference: %w", err)
 		}
 
-		bugDir := filepath.Dir(planFile)
+		baseDir := outputDir
+		if baseDir == "" {
+			baseDir = "."
+		}
+		bugDir := filepath.Join(baseDir, fmt.Sprintf("bug-%s", bugID))
+		planFile := filepath.Join(bugDir, "plan.json")
+
+		plan, err := LoadPlan(planFile)
+		if err != nil {
+			return fmt.Errorf("loading plan: %w (run 'snapd-repro-lp plan %s' first)", err, bugID)
+		}
 
 		out := cmd.OutOrStdout()
 		_, _ = fmt.Fprintf(out, "Loaded plan for bug #%d: %s\n", plan.BugID, plan.Title)
@@ -475,15 +488,15 @@ Requires OPENROUTER_API_KEY to be set.`,
 		}
 
 		out := cmd.OutOrStdout()
-		_, _ = fmt.Fprintf(out, "\n=== Reproduction Plan ===\n")
+		_, _ = fmt.Fprintf(out, "\n%s\n", bold("=== Reproduction Plan ==="))
 		_, _ = fmt.Fprintf(out, "Ubuntu version: %s\n", plan.UbuntuVersion)
 		for i, step := range plan.Steps {
 			_, _ = fmt.Fprintf(out, "  %d. %s\n", i+1, step.Description)
 		}
-		_, _ = fmt.Fprintf(out, "Plan saved to %s\n", planFile)
+		_, _ = fmt.Fprintf(out, "Saved plan to %s\n", green(fileHyperlink(planFile)))
 
 		// Phase 2: Execute.
-		_, _ = fmt.Fprintf(out, "\n--- Executing plan ---\n")
+		_, _ = fmt.Fprintf(out, "\n%s\n", bold("--- Executing plan ---"))
 		result, usage, err := runExecutionAgent(ctx, cmd, plan, bugDir)
 		if err != nil {
 			return err
@@ -655,6 +668,7 @@ func init() {
 	planCmd.Flags().BoolVarP(&forceOverwrite, "force", "f", false, "overwrite existing bug directory without prompting")
 
 	// exec command flags.
+	execCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "directory containing bug output (default: current directory)")
 	execCmd.Flags().StringVar(&ubuntuOverride, "ubuntu", "", "override the Ubuntu version from the plan (e.g. 22.04)")
 
 	// test lxd launch flags.
