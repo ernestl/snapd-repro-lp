@@ -6,7 +6,7 @@ sdks:
   - name: project-tools
 actions:
   lint: |
-    golangci-lint run
+    GOTOOLCHAIN=auto golangci-lint run
   test: |
     GOTOOLCHAIN=auto go test ./...
   build: |
