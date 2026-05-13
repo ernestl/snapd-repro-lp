@@ -105,7 +105,7 @@ func TestReproduceWritesJSON(t *testing.T) {
 		t.Errorf("ID = %d, want 12345", got.ID)
 	}
 	if got.Title != "snapd crashes" {
-		t.Errorf("Title = %q", got.Title)
+		t.Errorf("Title = %q, want %q", got.Title, "snapd crashes")
 	}
 	if len(got.Messages) != 1 {
 		t.Fatalf("Messages = %d, want 1", len(got.Messages))
@@ -132,5 +132,34 @@ func TestReproduceWritesJSON(t *testing.T) {
 	}
 	if string(attachData) != "crash log content" {
 		t.Errorf("Attachment content = %q, want %q", string(attachData), "crash log content")
+	}
+}
+
+func TestModelFromEnv(t *testing.T) {
+	modelName = ""
+	t.Setenv("OPENROUTER_MODEL", "custom/model")
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	_, _ = executeCommand("test", "chat", "hello")
+	if modelName != "custom/model" {
+		t.Errorf("model = %q, want %q", modelName, "custom/model")
+	}
+}
+
+func TestModelFlagOverridesEnv(t *testing.T) {
+	modelName = ""
+	t.Setenv("OPENROUTER_MODEL", "env/model")
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	_, _ = executeCommand("--model", "cli-model", "test", "chat", "hello")
+	if modelName != "cli-model" {
+		t.Errorf("model = %q, want %q", modelName, "cli-model")
+	}
+}
+
+func TestModelDefault(t *testing.T) {
+	modelName = ""
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	_, _ = executeCommand("test", "chat", "hello")
+	if modelName != "anthropic/claude-sonnet-4" {
+		t.Errorf("model = %q, want %q", modelName, "anthropic/claude-sonnet-4")
 	}
 }

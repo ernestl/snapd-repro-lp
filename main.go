@@ -20,6 +20,16 @@ var (
 	ubuntuOverride string
 )
 
+func resolveModel() {
+	if modelName == "" {
+		if env := os.Getenv("OPENROUTER_MODEL"); env != "" {
+			modelName = env
+		} else {
+			modelName = "anthropic/claude-sonnet-4"
+		}
+	}
+}
+
 var rootCmd = &cobra.Command{
 	Use:   "snapd-repro-lp",
 	Short: "Reproduce snapd bugs from Launchpad",
@@ -115,6 +125,8 @@ func fetchAndPrepareBug(cmd *cobra.Command, bugRef string) (*Bug, string, error)
 // --- helper: run the planning agent ---
 
 func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir string) (*ReproPlan, error) {
+	resolveModel()
+
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY environment variable is not set")
@@ -167,6 +179,8 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 // --- helper: run the execution agent ---
 
 func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan, bugDir string) (*ReproResult, *Usage, error) {
+	resolveModel()
+
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
 		return nil, nil, fmt.Errorf("OPENROUTER_API_KEY environment variable is not set")
@@ -428,6 +442,8 @@ var testChatCmd = &cobra.Command{
 	Long:  "Quick smoke test for the OpenRouter LLM integration. Requires OPENROUTER_API_KEY.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		resolveModel()
+
 		apiKey := os.Getenv("OPENROUTER_API_KEY")
 		if apiKey == "" {
 			return fmt.Errorf("OPENROUTER_API_KEY environment variable is not set")
@@ -554,7 +570,7 @@ var testLxdDeleteCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
-	rootCmd.PersistentFlags().StringVar(&modelName, "model", "deepseek/deepseek-chat", "LLM model to use via OpenRouter")
+	rootCmd.PersistentFlags().StringVar(&modelName, "model", "", "LLM model to use via OpenRouter (env: OPENROUTER_MODEL)")
 	rootCmd.PersistentFlags().IntVar(&maxIterations, "max-iter", 60, "maximum agent iterations")
 
 	// plan command flags.

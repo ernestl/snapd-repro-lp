@@ -69,6 +69,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 
 	for i := 0; i < maxIter; i++ {
 		a.progressf("[%d/%d] Waiting for LLM response...", i+1, maxIter)
+		a.logf("iteration %d: sending %d messages", i+1, len(messages))
 
 		resp, err := a.llm.ChatCompletion(ctx, messages, tools)
 		if err != nil {
@@ -85,6 +86,8 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 		if len(resp.Choices) == 0 {
 			return nil, fmt.Errorf("iteration %d: no choices in response", i+1)
 		}
+
+		a.logf("finish_reason: %s", resp.Choices[0].FinishReason)
 
 		choice := resp.Choices[0]
 

@@ -37,6 +37,9 @@ sudo ./setup.sh
 
 # Set your OpenRouter API key
 export OPENROUTER_API_KEY="sk-or-..."
+
+# Optionally set the model (defaults to anthropic/claude-sonnet-4)
+export OPENROUTER_MODEL="anthropic/claude-sonnet-4"
 ```
 
 ## Quick Start
@@ -91,6 +94,7 @@ Run the plan with:
 
 ```
 --model string    LLM model via OpenRouter (default "anthropic/claude-sonnet-4")
+                  Can also be set via OPENROUTER_MODEL environment variable.
 --max-iter int    Maximum agent iterations (default 20)
 -v, --verbose     Show detailed LLM debug output
 ```
