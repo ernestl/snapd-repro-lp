@@ -3,3 +3,6 @@ snapd-repro-lp
 
 # Bug output directories
 bug-*/
+
+# Workshop lock file
+.workshop.lock
