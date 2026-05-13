@@ -120,6 +120,7 @@ func writeSnapdKnowledge(b *strings.Builder) {
 - Common debug: "snap debug state /var/lib/snapd/state.json".
 - If a snap refresh is stuck, check "snap changes" and "snap change <id>" for the stuck change.
 - To simulate a narrow terminal (e.g., for output-formatting bugs), use COLUMNS=80 before the command. Do NOT use stty cols — it requires a TTY that lxc exec does not provide.
+- Reproduction environments default to LXD virtual machines. VMs support full systemd, all snaps, and nested LXD. Containers have limited systemd and cannot run snaps that require specific privileges.
 
 `)
 }
@@ -168,6 +169,7 @@ func BuildPlanningPrompt(bug *Bug, skills *SkillIndex) string {
 - List all attachments you reviewed in the attachments_reviewed field.
 - Commands run via lxc exec without a pseudo-TTY. Avoid commands that require a TTY (e.g., stty, dialog, interactive prompts). To simulate terminal width, set COLUMNS (e.g., COLUMNS=80 snap list).
 - Some snaps cannot run inside unprivileged LXD containers (e.g., lxd, multipass). Prefer simpler snaps that work in any container.
+- Prefer LXD virtual machines (set instance_type to "vm") for reproduction. Use containers (instance_type "container") only when the bug is specifically about behavior inside a container; in that case the plan should include steps to install and configure LXD inside the VM, then launch a nested container within it.
 - NEVER ask the user for permission or confirmation. Always call report_plan directly when your plan is ready.
 
 `)
@@ -205,21 +207,34 @@ func BuildPlanningUserMessage(bug *Bug) string {
 // --- Execution prompt ---
 
 // BuildExecutionPrompt constructs the system prompt for the execution
-// phase. The execution LLM follows the plan in an LXD container.
-func BuildExecutionPrompt(plan *ReproPlan, containerName string, skills *SkillIndex) string {
+// phase. The execution LLM follows the plan in an LXD instance.
+func BuildExecutionPrompt(plan *ReproPlan, instanceName string, skills *SkillIndex) string {
+	instanceType := plan.InstanceType
+	if instanceType == "" {
+		instanceType = "vm"
+	}
+	instanceKind := "VM"
+	if instanceType == "container" {
+		instanceKind = "container"
+	}
+
 	var b strings.Builder
 
-	b.WriteString(`You are an expert Ubuntu/snapd bug reproduction agent. Your goal is to execute a reproduction plan inside an LXD container and trigger the ORIGINAL BUG — the broken behavior described in the bug report.
-
-## Environment
-- You are operating inside an LXD container named "` + containerName + `".
-- The container runs Ubuntu ` + plan.UbuntuVersion + ` and has network access.
+	b.WriteString("You are an expert Ubuntu/snapd bug reproduction agent. Your goal is to execute a reproduction plan inside an LXD " + instanceKind + " and trigger the ORIGINAL BUG — the broken behavior described in the bug report.\n\n")
+	b.WriteString("## Environment\n")
+	b.WriteString("- You are operating inside an LXD " + instanceKind + " named \"" + instanceName + "\".\n")
+	if instanceType == "vm" {
+		b.WriteString("- This is a virtual machine, which supports full systemd, all snaps, and nested LXD. You can install and use the lxd snap inside this VM if the plan requires launching nested containers.\n")
+	} else {
+		b.WriteString("- This is a container with limited systemd. Some snaps (e.g., lxd, multipass) cannot run inside containers.\n")
+	}
+	b.WriteString(`- The instance runs Ubuntu ` + plan.UbuntuVersion + ` and has network access.
 - You execute commands via the run_command tool. All commands run as root.
 
 ## Critical: Reproduce the Bug, Not the Fix
 - Your goal is to trigger the BROKEN behavior described in the bug report.
 - Do NOT install fixed versions of snapd or other packages. Do NOT enable -proposed or SRU channels.
-- Use the stock/release software already in the container unless the plan specifies a particular buggy version.
+- Use the stock/release software already in the instance unless the plan specifies a particular buggy version.
 - "Reproduced" means you observed the BROKEN behavior. If the software works correctly, that means the bug was NOT reproduced.
 
 ## Instructions
@@ -231,7 +246,7 @@ func BuildExecutionPrompt(plan *ReproPlan, containerName string, skills *SkillIn
 6. Once you have genuinely attempted reproduction (including workarounds for any obstacles), call report_result with your findings. Do NOT ask for confirmation — call the tool directly.
 
 ## Tools Available
-- **run_command**: Execute a shell command inside the LXD container.
+- **run_command**: Execute a shell command inside the LXD instance.
 - **describe_skill**: Get a short description of a debugging skill to check its relevance before loading.
 - **load_skill**: Load the full content of a debugging skill with detailed commands and workflows.
 - **report_result**: Report whether the bug was reproduced. This ends the execution session.
@@ -262,6 +277,9 @@ func BuildExecutionPrompt(plan *ReproPlan, containerName string, skills *SkillIn
 	fmt.Fprintf(&b, "**Bug ID:** %d\n", plan.BugID)
 	fmt.Fprintf(&b, "**Title:** %s\n", plan.Title)
 	fmt.Fprintf(&b, "**Ubuntu Version:** %s\n", plan.UbuntuVersion)
+	if plan.InstanceType != "" {
+		fmt.Fprintf(&b, "**Instance Type:** %s\n", plan.InstanceType)
+	}
 	fmt.Fprintf(&b, "**Expected Result:** %s\n", plan.ExpectedResult)
 
 	b.WriteString("\n### Steps\n\n")
@@ -291,17 +309,16 @@ func BuildExecutionUserMessage(plan *ReproPlan) string {
 func BuildSystemPrompt(bug *Bug, containerName string, skills *SkillIndex) string {
 	var b strings.Builder
 
-	b.WriteString(`You are an expert Ubuntu/snapd bug reproduction agent. Your goal is to trigger the ORIGINAL BUG described in a Launchpad bug report inside an LXD container.
-
-## Environment
-- You are operating inside an LXD container named "` + containerName + `".
-- The container runs Ubuntu and has network access.
+	b.WriteString("You are an expert Ubuntu/snapd bug reproduction agent. Your goal is to trigger the ORIGINAL BUG described in a Launchpad bug report inside an LXD instance.\n\n")
+	b.WriteString("## Environment\n")
+	b.WriteString("- You are operating inside an LXD instance named \"" + containerName + "\".\n")
+	b.WriteString(`- The instance runs Ubuntu and has network access.
 - You execute commands via the run_command tool. All commands run as root.
 
 ## Critical: Reproduce the Bug, Not the Fix
 - Your goal is to trigger the BROKEN behavior described in the bug report.
 - Do NOT install fixed versions of snapd or other packages. Do NOT enable -proposed or SRU channels.
-- Use the stock/release software already in the container.
+- Use the stock/release software already in the instance.
 - "Reproduced" means you observed the BROKEN behavior. If the software works correctly, that means the bug was NOT reproduced.
 
 ## Instructions

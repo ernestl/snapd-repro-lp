@@ -9,37 +9,37 @@ import (
 	"testing"
 )
 
-// mockContainer implements ContainerManager for testing tools.
-type mockContainer struct {
+// mockInstance implements InstanceManager for testing tools.
+type mockInstance struct {
 	name     string
 	execFunc func(command string) (*ExecResult, error)
 	launched bool
 	deleted  bool
 }
 
-func (m *mockContainer) Launch(image string) error {
+func (m *mockInstance) Launch(image string, instanceType string) error {
 	m.launched = true
 	return nil
 }
 
-func (m *mockContainer) Exec(_ context.Context, command string) (*ExecResult, error) {
+func (m *mockInstance) Exec(_ context.Context, command string) (*ExecResult, error) {
 	if m.execFunc != nil {
 		return m.execFunc(command)
 	}
 	return &ExecResult{Output: "ok\n", ExitCode: 0}, nil
 }
 
-func (m *mockContainer) Delete() error {
+func (m *mockInstance) Delete() error {
 	m.deleted = true
 	return nil
 }
 
-func (m *mockContainer) Name() string {
+func (m *mockInstance) Name() string {
 	return m.name
 }
 
 func TestRunCommandSuccess(t *testing.T) {
-	mc := &mockContainer{
+	mc := &mockInstance{
 		name: "test-container",
 		execFunc: func(command string) (*ExecResult, error) {
 			return &ExecResult{
@@ -67,7 +67,7 @@ func TestRunCommandSuccess(t *testing.T) {
 }
 
 func TestRunCommandNonZeroExit(t *testing.T) {
-	mc := &mockContainer{
+	mc := &mockInstance{
 		name: "test-container",
 		execFunc: func(command string) (*ExecResult, error) {
 			return &ExecResult{
@@ -88,7 +88,7 @@ func TestRunCommandNonZeroExit(t *testing.T) {
 }
 
 func TestRunCommandExecError(t *testing.T) {
-	mc := &mockContainer{
+	mc := &mockInstance{
 		name: "test-container",
 		execFunc: func(command string) (*ExecResult, error) {
 			return nil, fmt.Errorf("container not reachable")
@@ -106,7 +106,7 @@ func TestRunCommandExecError(t *testing.T) {
 }
 
 func TestRunCommandEmptyCommand(t *testing.T) {
-	mc := &mockContainer{name: "test-container"}
+	mc := &mockInstance{name: "test-container"}
 	tool := NewRunCommandTool(mc)
 
 	result, err := tool.Execute(context.Background(),`{"command": ""}`)
@@ -119,7 +119,7 @@ func TestRunCommandEmptyCommand(t *testing.T) {
 }
 
 func TestRunCommandInvalidJSON(t *testing.T) {
-	mc := &mockContainer{name: "test-container"}
+	mc := &mockInstance{name: "test-container"}
 	tool := NewRunCommandTool(mc)
 
 	_, err := tool.Execute(context.Background(),`not json`)
@@ -131,7 +131,7 @@ func TestRunCommandInvalidJSON(t *testing.T) {
 func TestRunCommandTruncation(t *testing.T) {
 	// Create output larger than 50000 bytes.
 	bigOutput := strings.Repeat("x", 60000)
-	mc := &mockContainer{
+	mc := &mockInstance{
 		name: "test-container",
 		execFunc: func(command string) (*ExecResult, error) {
 			return &ExecResult{Output: bigOutput, ExitCode: 0}, nil
@@ -152,7 +152,7 @@ func TestRunCommandTruncation(t *testing.T) {
 }
 
 func TestRunCommandDefinition(t *testing.T) {
-	mc := &mockContainer{name: "test-container"}
+	mc := &mockInstance{name: "test-container"}
 	tool := NewRunCommandTool(mc)
 
 	if tool.Name() != "run_command" {
@@ -238,7 +238,7 @@ func TestReportResultDefinition(t *testing.T) {
 }
 
 func TestToolExecutorDispatch(t *testing.T) {
-	mc := &mockContainer{
+	mc := &mockInstance{
 		name: "test-container",
 		execFunc: func(command string) (*ExecResult, error) {
 			return &ExecResult{Output: "hello\n", ExitCode: 0}, nil
@@ -395,6 +395,7 @@ func TestReadFileDefinition(t *testing.T) {
 func TestReportPlanSuccess(t *testing.T) {
 	tool := NewReportPlanTool()
 	result, err := tool.Execute(context.Background(),`{
+		"instance_type": "vm",
 		"ubuntu_version": "24.04",
 		"steps": [
 			{"description": "Install snapd", "command": "apt-get install -y snapd"},
@@ -412,6 +413,9 @@ func TestReportPlanSuccess(t *testing.T) {
 	if tool.Plan == nil {
 		t.Fatal("Plan should be set")
 	}
+	if tool.Plan.InstanceType != "vm" {
+		t.Errorf("InstanceType = %q, want %q", tool.Plan.InstanceType, "vm")
+	}
 	if tool.Plan.UbuntuVersion != "24.04" {
 		t.Errorf("UbuntuVersion = %q, want %q", tool.Plan.UbuntuVersion, "24.04")
 	}
@@ -426,6 +430,25 @@ func TestReportPlanSuccess(t *testing.T) {
 	}
 	if len(tool.Plan.AttachmentsReviewed) != 1 || tool.Plan.AttachmentsReviewed[0] != "journal.log" {
 		t.Errorf("AttachmentsReviewed = %v", tool.Plan.AttachmentsReviewed)
+	}
+}
+
+func TestReportPlanContainer(t *testing.T) {
+	tool := NewReportPlanTool()
+	result, err := tool.Execute(context.Background(),`{
+		"instance_type": "container",
+		"ubuntu_version": "22.04",
+		"steps": [{"description": "test", "command": "echo test"}],
+		"expected_result": "test passes"
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.StopAgent {
+		t.Error("StopAgent should be true")
+	}
+	if tool.Plan.InstanceType != "container" {
+		t.Errorf("InstanceType = %q, want %q", tool.Plan.InstanceType, "container")
 	}
 }
 

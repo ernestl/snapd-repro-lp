@@ -31,15 +31,15 @@ type Tool interface {
 
 // --- run_command tool ---
 
-// RunCommandTool executes shell commands inside an LXD container.
+// RunCommandTool executes shell commands inside an LXD instance.
 type RunCommandTool struct {
-	container ContainerManager
+	instance InstanceManager
 }
 
 // NewRunCommandTool creates a new run_command tool backed by the given
-// container manager.
-func NewRunCommandTool(container ContainerManager) *RunCommandTool {
-	return &RunCommandTool{container: container}
+// instance manager.
+func NewRunCommandTool(instance InstanceManager) *RunCommandTool {
+	return &RunCommandTool{instance: instance}
 }
 
 func (t *RunCommandTool) Name() string { return "run_command" }
@@ -49,7 +49,7 @@ func (t *RunCommandTool) Definition() ToolDef {
 		Type: "function",
 		Function: ToolSchema{
 			Name:        "run_command",
-			Description: "Execute a shell command inside the LXD container. Use this to install packages, run scripts, inspect files, and reproduce bugs.",
+			Description: "Execute a shell command inside the LXD instance. Use this to install packages, run scripts, inspect files, and reproduce bugs.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -78,7 +78,7 @@ func (t *RunCommandTool) Execute(ctx context.Context, argsJSON string) (*ToolRes
 		return &ToolResult{Output: "error: command is required"}, nil
 	}
 
-	result, err := t.container.Exec(ctx, args.Command)
+	result, err := t.instance.Exec(ctx, args.Command)
 	if err != nil {
 		return nil, fmt.Errorf("executing command: %w", err)
 	}
@@ -287,6 +287,7 @@ type ReproPlan struct {
 	BugID               int        `json:"bug_id"`
 	Title               string     `json:"title"`
 	UbuntuVersion       string     `json:"ubuntu_version"`
+	InstanceType        string     `json:"instance_type"`
 	Steps               []PlanStep `json:"steps"`
 	ExpectedResult      string     `json:"expected_result"`
 	AttachmentsReviewed []string   `json:"attachments_reviewed"`
@@ -316,6 +317,11 @@ func (t *ReportPlanTool) Definition() ToolDef {
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
+					"instance_type": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"vm", "container"},
+						"description": "LXD instance type. Use 'vm' (default) for most bugs. Use 'container' only when the bug is specifically about behavior inside a container — then the plan should include steps to launch a nested container inside the VM.",
+					},
 					"ubuntu_version": map[string]interface{}{
 						"type":        "string",
 						"description": "The Ubuntu version to use for reproduction (e.g. '24.04', '22.04').",
@@ -356,6 +362,7 @@ func (t *ReportPlanTool) Definition() ToolDef {
 }
 
 type reportPlanArgs struct {
+	InstanceType        string     `json:"instance_type"`
 	UbuntuVersion       string     `json:"ubuntu_version"`
 	Steps               []PlanStep `json:"steps"`
 	ExpectedResult      string     `json:"expected_result"`
@@ -369,6 +376,7 @@ func (t *ReportPlanTool) Execute(_ context.Context, argsJSON string) (*ToolResul
 	}
 
 	t.Plan = &ReproPlan{
+		InstanceType:        args.InstanceType,
 		UbuntuVersion:       args.UbuntuVersion,
 		Steps:               args.Steps,
 		ExpectedResult:      args.ExpectedResult,

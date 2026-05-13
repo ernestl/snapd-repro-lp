@@ -186,6 +186,8 @@ func TestBuildPlanningPrompt(t *testing.T) {
 		"focal = 20.04",
 		"Snapd Domain Knowledge",
 		"journalctl -u snapd",
+		"instance_type",
+		"virtual machines",
 	}
 	for _, check := range checks {
 		if !strings.Contains(prompt, check) {
@@ -259,9 +261,10 @@ func TestBuildExecutionPrompt(t *testing.T) {
 		BugID:         1662786,
 		Title:         "snap list output hard to read",
 		UbuntuVersion: "24.04",
+		InstanceType:  "vm",
 		Steps: []PlanStep{
 			{Description: "Update packages", Command: "apt-get update"},
-			{Description: "Check snap list", Command: "stty cols 80 && snap list"},
+			{Description: "Check snap list", Command: "COLUMNS=80 snap list"},
 		},
 		ExpectedResult: "snap list wraps poorly at 80 columns",
 	}
@@ -272,15 +275,18 @@ func TestBuildExecutionPrompt(t *testing.T) {
 		"expert Ubuntu/snapd bug reproduction agent",
 		"snapd-repro-xyz",
 		"Ubuntu 24.04",
+		"LXD VM",
+		"virtual machine",
 		"run_command",
 		"report_result",
 		"Reproduction Plan",
 		"Bug ID:** 1662786",
+		"Instance Type:** vm",
 		"snap list output hard to read",
 		"Step 1:** Update packages",
 		"apt-get update",
 		"Step 2:** Check snap list",
-		"stty cols 80 && snap list",
+		"COLUMNS=80 snap list",
 		"snap list wraps poorly at 80 columns",
 		"Snapd Domain Knowledge",
 	}
@@ -288,6 +294,30 @@ func TestBuildExecutionPrompt(t *testing.T) {
 		if !strings.Contains(prompt, check) {
 			t.Errorf("execution prompt missing %q", check)
 		}
+	}
+}
+
+func TestBuildExecutionPromptContainer(t *testing.T) {
+	plan := &ReproPlan{
+		BugID:         1662786,
+		Title:         "container-specific bug",
+		UbuntuVersion: "24.04",
+		InstanceType:  "container",
+		Steps:         []PlanStep{{Description: "test", Command: "echo test"}},
+		ExpectedResult: "something happens",
+	}
+
+	prompt := BuildExecutionPrompt(plan, "snapd-repro-abc", nil)
+
+	if !strings.Contains(prompt, "LXD container") {
+		t.Error("execution prompt should mention 'LXD container' for container instance type")
+	}
+	if !strings.Contains(prompt, "limited systemd") {
+		t.Error("execution prompt should mention limited systemd for container instance type")
+	}
+	// The Environment section should say "LXD container", not "LXD VM".
+	if !strings.Contains(prompt, "You are operating inside an LXD container") {
+		t.Error("Environment section should say 'LXD container'")
 	}
 }
 
@@ -320,6 +350,7 @@ func TestSaveAndLoadPlan(t *testing.T) {
 		BugID:         12345,
 		Title:         "test bug",
 		UbuntuVersion: "24.04",
+		InstanceType:  "vm",
 		Steps: []PlanStep{
 			{Description: "step one", Command: "echo one"},
 			{Description: "step two", Command: "echo two"},
@@ -346,6 +377,9 @@ func TestSaveAndLoadPlan(t *testing.T) {
 	}
 	if loaded.UbuntuVersion != plan.UbuntuVersion {
 		t.Errorf("UbuntuVersion = %q, want %q", loaded.UbuntuVersion, plan.UbuntuVersion)
+	}
+	if loaded.InstanceType != plan.InstanceType {
+		t.Errorf("InstanceType = %q, want %q", loaded.InstanceType, plan.InstanceType)
 	}
 	if len(loaded.Steps) != 2 {
 		t.Fatalf("Steps = %d, want 2", len(loaded.Steps))

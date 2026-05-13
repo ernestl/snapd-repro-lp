@@ -228,21 +228,31 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 		_, _ = fmt.Fprintf(out, "Overriding Ubuntu version: %s → %s\n", plan.UbuntuVersion, ubuntuOverride)
 	}
 
-	// Create and launch LXD container.
-	container := NewLXDManager()
-	_, _ = fmt.Fprintf(out, "Launching container %s (ubuntu:%s)...\n", container.Name(), ubuntuVersion)
-	if err := container.Launch(ubuntuVersion); err != nil {
-		return nil, nil, fmt.Errorf("launching container: %w", err)
+	// Determine instance type: default to "vm" for backward compat.
+	instanceType := plan.InstanceType
+	if instanceType == "" {
+		instanceType = "vm"
+	}
+
+	// Create and launch LXD instance.
+	instance := NewLXDManager()
+	instanceKind := "VM"
+	if instanceType == "container" {
+		instanceKind = "container"
+	}
+	_, _ = fmt.Fprintf(out, "Launching %s %s (ubuntu:%s)...\n", instanceKind, instance.Name(), ubuntuVersion)
+	if err := instance.Launch(ubuntuVersion, instanceType); err != nil {
+		return nil, nil, fmt.Errorf("launching %s: %w", instanceKind, err)
 	}
 	defer func() {
-		_, _ = fmt.Fprintf(out, "Cleaning up container %s...\n", container.Name())
-		if delErr := container.Delete(); delErr != nil {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to delete container: %v\n", delErr)
+		_, _ = fmt.Fprintf(out, "Cleaning up %s %s...\n", instanceKind, instance.Name())
+		if delErr := instance.Delete(); delErr != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to delete instance: %v\n", delErr)
 		}
 	}()
 
 	// Build execution tools.
-	runCmd := NewRunCommandTool(container)
+	runCmd := NewRunCommandTool(instance)
 	reportResult := NewReportResultTool()
 	describeSkill := NewDescribeSkillTool(skillIndex)
 	loadSkill := NewLoadSkillTool(skillIndex)
@@ -257,7 +267,7 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 	})
 
 	// Build prompts.
-	systemPrompt := BuildExecutionPrompt(plan, container.Name(), skillIndex)
+	systemPrompt := BuildExecutionPrompt(plan, instance.Name(), skillIndex)
 	userMessage := BuildExecutionUserMessage(plan)
 
 	// Save prompt for inspection.
@@ -549,27 +559,38 @@ var testLxdCmd = &cobra.Command{
 	Long:  "Subcommands for manually testing LXD container launch, exec, and delete.",
 }
 
+var testLxdLaunchVM bool
+
 var testLxdLaunchCmd = &cobra.Command{
 	Use:     "launch [version]",
-	Short:   "Launch an LXD container",
-	Long:    "Launch an Ubuntu LXD container and print its name. Use the name with exec and delete.",
-	Example: "  snapd-repro-lp test lxd launch 24.04",
+	Short:   "Launch an LXD instance",
+	Long:    "Launch an Ubuntu LXD instance and print its name. Use the name with exec and delete.",
+	Example: "  snapd-repro-lp test lxd launch 24.04\n  snapd-repro-lp test lxd launch --vm 24.04",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		version := args[0]
-		container := NewLXDManager()
+		instance := NewLXDManager()
 		out := cmd.OutOrStdout()
 
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Launching container %s (ubuntu:%s)...\n", container.Name(), version)
-		if err := container.Launch(version); err != nil {
+		instanceType := "container"
+		if testLxdLaunchVM {
+			instanceType = "vm"
+		}
+		kind := "container"
+		if instanceType == "vm" {
+			kind = "VM"
+		}
+
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Launching %s %s (ubuntu:%s)...\n", kind, instance.Name(), version)
+		if err := instance.Launch(version, instanceType); err != nil {
 			return fmt.Errorf("launch failed: %w", err)
 		}
 
-		_, _ = fmt.Fprintln(out, container.Name())
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Container is ready. Run commands with:\n")
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  snapd-repro-lp test lxd exec %s \"snap version\"\n", container.Name())
+		_, _ = fmt.Fprintln(out, instance.Name())
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Instance is ready. Run commands with:\n")
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  snapd-repro-lp test lxd exec %s \"snap version\"\n", instance.Name())
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Delete with:\n")
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  snapd-repro-lp test lxd delete %s\n", container.Name())
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  snapd-repro-lp test lxd delete %s\n", instance.Name())
 		return nil
 	},
 }
@@ -635,6 +656,9 @@ func init() {
 
 	// exec command flags.
 	execCmd.Flags().StringVar(&ubuntuOverride, "ubuntu", "", "override the Ubuntu version from the plan (e.g. 22.04)")
+
+	// test lxd launch flags.
+	testLxdLaunchCmd.Flags().BoolVar(&testLxdLaunchVM, "vm", false, "launch as a virtual machine instead of a container")
 
 	// reproduce command flags (combines plan + exec).
 	reproduceCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "directory to write output (default: current directory)")

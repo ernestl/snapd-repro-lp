@@ -2,6 +2,7 @@
   "bug_id": 2137543,
   "title": "snapctl uses host locale",
   "ubuntu_version": "22.04",
+  "instance_type": "vm",
   "steps": [
     {
       "description": "Install language-pack-de to set up German locale",

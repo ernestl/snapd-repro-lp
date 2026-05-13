@@ -16,25 +16,26 @@ type ExecResult struct {
 	ExitCode int
 }
 
-// ContainerManager manages the lifecycle of a container and command
+// InstanceManager manages the lifecycle of an LXD instance and command
 // execution within it.
-type ContainerManager interface {
-	// Launch creates and starts a new container using the given Ubuntu
-	// image alias (e.g. "24.04").
-	Launch(image string) error
+type InstanceManager interface {
+	// Launch creates and starts a new LXD instance using the given Ubuntu
+	// image alias (e.g. "24.04"). The instanceType must be "vm" or
+	// "container".
+	Launch(image string, instanceType string) error
 
-	// Exec runs a command inside the container and returns the combined
+	// Exec runs a command inside the instance and returns the combined
 	// stdout/stderr output and exit code.
 	Exec(ctx context.Context, command string) (*ExecResult, error)
 
-	// Delete force-removes the container.
+	// Delete force-removes the instance.
 	Delete() error
 
-	// Name returns the container name.
+	// Name returns the instance name.
 	Name() string
 }
 
-// LXDManager implements ContainerManager using the lxc CLI.
+// LXDManager implements InstanceManager using the lxc CLI.
 type LXDManager struct {
 	name    string
 	running bool
@@ -68,16 +69,23 @@ func (m *LXDManager) Name() string {
 	return m.name
 }
 
-// Launch creates and starts an LXD container using the given Ubuntu
-// image alias. For example, image "24.04" launches
-// "ubuntu:24.04".
-func (m *LXDManager) Launch(image string) error {
+// Launch creates and starts an LXD instance using the given Ubuntu
+// image alias. For example, image "24.04" launches "ubuntu:24.04".
+// If instanceType is "vm", the instance is launched as a virtual machine
+// (--vm flag). If instanceType is "container" or empty, it is launched
+// as a container.
+func (m *LXDManager) Launch(image string, instanceType string) error {
 	if m.running {
-		return fmt.Errorf("container %s is already running", m.name)
+		return fmt.Errorf("instance %s is already running", m.name)
 	}
 
 	imageRef := "ubuntu:" + image
-	cmd := m.execCommand(context.Background(), "lxc", "launch", imageRef, m.name)
+	args := []string{"launch", imageRef, m.name}
+	if instanceType == "vm" {
+		args = append(args, "--vm")
+	}
+
+	cmd := m.execCommand(context.Background(), "lxc", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -87,9 +95,13 @@ func (m *LXDManager) Launch(image string) error {
 		return fmt.Errorf("lxc launch: %w", err)
 	}
 
-	// Wait for the container's network to come up by polling for an
-	// IPv4 address on eth0 (up to 30 seconds).
-	if err := m.waitForNetwork(30 * time.Second); err != nil {
+	// Wait for the instance's network to come up by polling for an
+	// IPv4 address on eth0. VMs need more time to boot.
+	timeout := 30 * time.Second
+	if instanceType == "vm" {
+		timeout = 60 * time.Second
+	}
+	if err := m.waitForNetwork(timeout); err != nil {
 		// Best-effort cleanup on failure.
 		_ = m.Delete()
 		return err
@@ -103,7 +115,7 @@ func (m *LXDManager) Launch(image string) error {
 // executed via "lxc exec <name> -- bash -c <command>".
 func (m *LXDManager) Exec(context context.Context, command string) (*ExecResult, error) {
 	if !m.running {
-		return nil, fmt.Errorf("container %s is not running", m.name)
+		return nil, fmt.Errorf("instance %s is not running", m.name)
 	}
 
 	cmd := m.execCommand(context, "lxc", "exec", m.name, "--", "bash", "-c", command)

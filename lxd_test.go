@@ -149,7 +149,17 @@ func TestLXDManagerNameUniqueness(t *testing.T) {
 
 func TestLXDManagerLaunch(t *testing.T) {
 	m := newTestLXDManager("success")
-	if err := m.Launch("24.04"); err != nil {
+	if err := m.Launch("24.04", "container"); err != nil {
+		t.Fatalf("Launch failed: %v", err)
+	}
+	if !m.running {
+		t.Error("expected running = true after Launch")
+	}
+}
+
+func TestLXDManagerLaunchVM(t *testing.T) {
+	m := newTestLXDManager("success")
+	if err := m.Launch("24.04", "vm"); err != nil {
 		t.Fatalf("Launch failed: %v", err)
 	}
 	if !m.running {
@@ -159,11 +169,11 @@ func TestLXDManagerLaunch(t *testing.T) {
 
 func TestLXDManagerLaunchAlreadyRunning(t *testing.T) {
 	m := newTestLXDManager("success")
-	if err := m.Launch("24.04"); err != nil {
+	if err := m.Launch("24.04", "container"); err != nil {
 		t.Fatalf("Launch failed: %v", err)
 	}
 
-	err := m.Launch("24.04")
+	err := m.Launch("24.04", "container")
 	if err == nil {
 		t.Fatal("expected error for double Launch")
 	}
@@ -174,7 +184,7 @@ func TestLXDManagerLaunchAlreadyRunning(t *testing.T) {
 
 func TestLXDManagerLaunchFail(t *testing.T) {
 	m := newTestLXDManager("launch_fail")
-	err := m.Launch("24.04")
+	err := m.Launch("24.04", "container")
 	if err == nil {
 		t.Fatal("expected error for failed launch")
 	}
@@ -185,7 +195,7 @@ func TestLXDManagerLaunchFail(t *testing.T) {
 
 func TestLXDManagerExec(t *testing.T) {
 	m := newTestLXDManager("success")
-	if err := m.Launch("24.04"); err != nil {
+	if err := m.Launch("24.04", "container"); err != nil {
 		t.Fatalf("Launch failed: %v", err)
 	}
 
@@ -205,7 +215,7 @@ func TestLXDManagerExecNonZero(t *testing.T) {
 	// Need to launch first with a behavior that lets launch succeed
 	// but exec fail. Use a manager where we swap behavior after launch.
 	launchM := newTestLXDManager("success")
-	if err := launchM.Launch("24.04"); err != nil {
+	if err := launchM.Launch("24.04", "container"); err != nil {
 		t.Fatalf("Launch failed: %v", err)
 	}
 	// Now swap to exec_fail behavior.
@@ -234,7 +244,7 @@ func TestLXDManagerExecNotRunning(t *testing.T) {
 
 func TestLXDManagerDelete(t *testing.T) {
 	m := newTestLXDManager("success")
-	if err := m.Launch("24.04"); err != nil {
+	if err := m.Launch("24.04", "container"); err != nil {
 		t.Fatalf("Launch failed: %v", err)
 	}
 
@@ -248,7 +258,7 @@ func TestLXDManagerDelete(t *testing.T) {
 
 func TestLXDManagerDeleteFail(t *testing.T) {
 	m := newTestLXDManager("success")
-	if err := m.Launch("24.04"); err != nil {
+	if err := m.Launch("24.04", "container"); err != nil {
 		t.Fatalf("Launch failed: %v", err)
 	}
 	m.execCommand = fakeExecCommand("delete_fail")

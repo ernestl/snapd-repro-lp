@@ -77,7 +77,7 @@ func TestAgentSingleToolCallThenReport(t *testing.T) {
 	ts, llmClient := mockLLMServer(t, responses)
 	defer ts.Close()
 
-	mc := &mockContainer{
+	mc := &mockInstance{
 		name: "test",
 		execFunc: func(command string) (*ExecResult, error) {
 			return &ExecResult{Output: "snap    2.61\nsnapd   2.61\n", ExitCode: 0}, nil
@@ -196,7 +196,7 @@ func TestAgentMaxIterations(t *testing.T) {
 	ts, llmClient := mockLLMServer(t, responses)
 	defer ts.Close()
 
-	mc := &mockContainer{
+	mc := &mockInstance{
 		name: "test",
 		execFunc: func(command string) (*ExecResult, error) {
 			return &ExecResult{Output: "looping\n", ExitCode: 0}, nil
@@ -304,7 +304,7 @@ func TestAgentMultipleToolCallsInOneResponse(t *testing.T) {
 	ts, llmClient := mockLLMServer(t, responses)
 	defer ts.Close()
 
-	mc := &mockContainer{
+	mc := &mockInstance{
 		name: "test",
 		execFunc: func(command string) (*ExecResult, error) {
 			return &ExecResult{Output: "ok\n", ExitCode: 0}, nil
