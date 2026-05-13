@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // AgentConfig holds configuration for an agent run.
@@ -18,11 +19,19 @@ type AgentConfig struct {
 type AgentResult struct {
 	// StoppedByTool is the name of the tool that stopped the agent
 	// (e.g. "report_result" or "report_plan"). Empty if the agent
-	// stopped because the LLM returned a text response.
+	// stopped because the LLM returned a text response or hit max
+	// iterations.
 	StoppedByTool string
 	// LastMessage is the LLM's last text message (if it stopped with
 	// finish_reason "stop" instead of calling a tool).
 	LastMessage string
+	// MaxIterationsReached is true when the agent loop ended because
+	// it exhausted the configured iteration budget.
+	MaxIterationsReached bool
+	// RecentActivity summarises the last few tool calls and their
+	// outputs so the caller can understand what the agent was working
+	// on when it ran out of iterations.
+	RecentActivity string
 }
 
 // Agent orchestrates the LLM agent loop: sending messages to the LLM,
@@ -135,7 +144,70 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 		}
 	}
 
-	return nil, fmt.Errorf("agent reached max iterations (%d) without a result", maxIter)
+	a.progressf("[%d/%d] Agent reached max iterations without a result", maxIter, maxIter)
+	return &AgentResult{
+		MaxIterationsReached: true,
+		RecentActivity:       summariseRecentActivity(messages),
+	}, nil
+}
+
+// summariseRecentActivity extracts the last few tool calls and their
+// outputs from the conversation history so we can report what the agent
+// was busy with when it ran out of iterations.
+func summariseRecentActivity(messages []ChatMessage) string {
+	// Walk backward and collect up to the last 6 tool-related messages
+	// (3 assistant tool-call messages + their 3 tool-result messages).
+	const maxMessages = 6
+	var relevant []ChatMessage
+	for i := len(messages) - 1; i >= 0 && len(relevant) < maxMessages; i-- {
+		m := messages[i]
+		switch m.Role {
+		case RoleTool:
+			relevant = append(relevant, m)
+		case RoleAssistant:
+			if len(m.ToolCalls) > 0 {
+				relevant = append(relevant, m)
+			} else if m.Content != nil && *m.Content != "" {
+				relevant = append(relevant, m)
+			}
+		}
+	}
+
+	// Reverse so they're in chronological order.
+	for i, j := 0, len(relevant)-1; i < j; i, j = i+1, j-1 {
+		relevant[i], relevant[j] = relevant[j], relevant[i]
+	}
+
+	var b strings.Builder
+	for _, m := range relevant {
+		switch m.Role {
+		case RoleAssistant:
+			if len(m.ToolCalls) > 0 {
+				for _, tc := range m.ToolCalls {
+					b.WriteString(fmt.Sprintf("-> %s(%s)\n",
+						tc.Function.Name,
+						truncate(tc.Function.Arguments, 200)))
+				}
+			} else if m.Content != nil {
+				b.WriteString(fmt.Sprintf("LLM: %s\n", truncate(*m.Content, 300)))
+			}
+		case RoleTool:
+			name := m.Name
+			if name == "" {
+				name = "tool"
+			}
+			content := ""
+			if m.Content != nil {
+				content = truncate(*m.Content, 300)
+			}
+			b.WriteString(fmt.Sprintf("<- %s: %s\n", name, content))
+		}
+	}
+
+	if b.Len() == 0 {
+		return "(no tool activity recorded)"
+	}
+	return b.String()
 }
 
 // progressf always prints progress messages to the output writer.

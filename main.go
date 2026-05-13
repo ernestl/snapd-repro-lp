@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -20,6 +21,23 @@ var (
 	ubuntuOverride string
 )
 
+//go:embed skills.json
+var skillsJSON []byte
+
+//go:embed skills/*
+var skillsFS embed.FS
+
+// skillIndex is the parsed skill index, initialized at startup.
+var skillIndex *SkillIndex
+
+func init() {
+	var err error
+	skillIndex, err = NewSkillIndex(skillsJSON, skillsFS)
+	if err != nil {
+		panic(fmt.Sprintf("failed to load embedded skills: %v", err))
+	}
+}
+
 func resolveModel() {
 	if modelName == "" {
 		if env := os.Getenv("OPENROUTER_MODEL"); env != "" {
@@ -31,9 +49,10 @@ func resolveModel() {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "snapd-repro-lp",
-	Short: "Reproduce snapd bugs from Launchpad",
-	Long:  "snapd-repro-lp creates reproducers for bugs reported against snapd on Launchpad.",
+	Use:          "snapd-repro-lp",
+	Short:        "Reproduce snapd bugs from Launchpad",
+	Long:         "snapd-repro-lp creates reproducers for bugs reported against snapd on Launchpad.",
+	SilenceUsage: true,
 }
 
 // --- helper: fetch bug and prepare bug directory ---
@@ -137,10 +156,13 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 		readFile = NewReadFileTool(attachmentsDir)
 	}
 	reportPlan := NewReportPlanTool()
-	executor := NewToolExecutor(reportPlan)
+	describeSkill := NewDescribeSkillTool(skillIndex)
+	loadSkill := NewLoadSkillTool(skillIndex)
+	tools := []Tool{reportPlan, describeSkill, loadSkill}
 	if readFile != nil {
-		executor = NewToolExecutor(readFile, reportPlan)
+		tools = append(tools, readFile)
 	}
+	executor := NewToolExecutor(tools...)
 
 	// Build LLM client and agent.
 	llmClient := NewLLMClient(apiKey, modelName)
@@ -151,8 +173,16 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 	})
 
 	// Build prompts.
-	systemPrompt := BuildPlanningPrompt(bug)
+	systemPrompt := BuildPlanningPrompt(bug, skillIndex)
 	userMessage := BuildPlanningUserMessage(bug)
+
+	// Save prompt for inspection.
+	promptFile := filepath.Join(bugDir, "planning-prompt.html")
+	if err := SavePromptHTML(promptFile, fmt.Sprintf("Planning Prompt — Bug #%d", bug.ID), systemPrompt, userMessage); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to save prompt HTML: %v\n", err)
+	} else {
+		_, _ = fmt.Fprintf(out, "Prompt saved to %s\n", fileHyperlink(promptFile))
+	}
 
 	_, _ = fmt.Fprintf(out, "\nPlanning reproduction (model: %s)...\n", modelName)
 	result, err := agent.Run(ctx, systemPrompt, userMessage)
@@ -214,7 +244,9 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 	// Build execution tools.
 	runCmd := NewRunCommandTool(container)
 	reportResult := NewReportResultTool()
-	executor := NewToolExecutor(runCmd, reportResult)
+	describeSkill := NewDescribeSkillTool(skillIndex)
+	loadSkill := NewLoadSkillTool(skillIndex)
+	executor := NewToolExecutor(runCmd, reportResult, describeSkill, loadSkill)
 
 	// Build LLM client and agent.
 	llmClient := NewLLMClient(apiKey, modelName)
@@ -225,8 +257,16 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 	})
 
 	// Build prompts.
-	systemPrompt := BuildExecutionPrompt(plan, container.Name())
+	systemPrompt := BuildExecutionPrompt(plan, container.Name(), skillIndex)
 	userMessage := BuildExecutionUserMessage(plan)
+
+	// Save prompt for inspection.
+	promptFile := filepath.Join(bugDir, "execution-prompt.html")
+	if err := SavePromptHTML(promptFile, fmt.Sprintf("Execution Prompt — Bug #%d", plan.BugID), systemPrompt, userMessage); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to save prompt HTML: %v\n", err)
+	} else {
+		_, _ = fmt.Fprintf(out, "Prompt saved to %s\n", fileHyperlink(promptFile))
+	}
 
 	_, _ = fmt.Fprintf(out, "Executing plan (model: %s, max iterations: %d)...\n", modelName, maxIterations)
 	result, err := agent.Run(ctx, systemPrompt, userMessage)
@@ -240,9 +280,22 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 	}
 
 	// Fallback: agent stopped without calling report_result.
+	var explanation string
+	switch {
+	case result.MaxIterationsReached:
+		explanation = fmt.Sprintf(
+			"Agent exhausted its iteration budget (%d) without reaching a conclusion.\n\nRecent activity:\n%s",
+			maxIterations, result.RecentActivity)
+	case result.LastMessage != "":
+		explanation = fmt.Sprintf(
+			"Agent stopped without reporting a result. Last output: %s",
+			result.LastMessage)
+	default:
+		explanation = "Agent stopped without reporting a result (no output captured)."
+	}
 	fallback := &ReproResult{
 		Reproduced:  false,
-		Explanation: fmt.Sprintf("Agent stopped without reporting a result. Last output: %s", result.LastMessage),
+		Explanation: explanation,
 	}
 	return fallback, &agent.TotalUsage, nil
 }

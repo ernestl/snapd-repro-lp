@@ -1,0 +1,46 @@
+{
+  "bug_id": 2137543,
+  "title": "snapctl uses host locale",
+  "ubuntu_version": "22.04",
+  "steps": [
+    {
+      "description": "Install language-pack-de to set up German locale",
+      "command": "DEBIAN_FRONTEND=noninteractive apt-get install -y language-pack-de"
+    },
+    {
+      "description": "Update system packages",
+      "command": "apt-get update"
+    },
+    {
+      "description": "Install snapd for snap package management",
+      "command": "DEBIAN_FRONTEND=noninteractive apt-get install -y snapd"
+    },
+    {
+      "description": "Install go-snapctl-tester snap which contains the test snapctl services",
+      "command": "snap install go-snapctl-tester"
+    },
+    {
+      "description": "Set German locale in the environment",
+      "command": "export LANG=de_DE.UTF-8"
+    },
+    {
+      "description": "Verify snapctl services output follows host locale (before fix)",
+      "command": "snap run --shell go-snapctl-tester.test -c 'snapctl services'"
+    },
+    {
+      "description": "Attempt to force English output using LANG=C.utf8 (before fix)",
+      "command": "snap run --shell go-snapctl-tester.test -c 'LANG=C.utf8 snapctl services'"
+    },
+    {
+      "description": "Upgrade snapd to version 2.75.2+ubuntu22.04 (from proposed)",
+      "command": "apt-get install -y -t jammy-proposed snapd"
+    },
+    {
+      "description": "Verify snapctl services output is in English (after fix)",
+      "command": "snap run --shell go-snapctl-tester.test -c 'snapctl services'"
+    }
+  ],
+  "expected_result": "Before upgrading snapd, snapctl services output will be in German despite LANG=C.utf8. After upgrading to snapd 2.75.2+ubuntu22.04, snapctl services output should always be in English regardless of the host locale setting.",
+  "attachments_reviewed": [],
+  "model_used": "deepseek/deepseek-chat"
+}

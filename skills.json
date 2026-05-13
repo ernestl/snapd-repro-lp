@@ -1,0 +1,46 @@
+{
+  "skills": [
+    {
+      "name": "snap-refresh",
+      "keywords": ["refresh", "update", "upgrade", "held", "inhibit", "gate", "channel", "revision"],
+      "summary": "Debugging snap refresh and update failures including held refreshes, gated updates, and channel tracking issues.",
+      "content_file": "skills/snap-refresh.md"
+    },
+    {
+      "name": "snap-connections",
+      "keywords": ["connections", "interfaces", "plugs", "slots", "denied", "permission", "apparmor", "seccomp"],
+      "summary": "Debugging snap interface connections, plug/slot issues, and permission denials.",
+      "content_file": "skills/snap-connections.md"
+    },
+    {
+      "name": "snap-services",
+      "keywords": ["services", "systemd", "start", "stop", "restart", "daemon", "timer", "socket"],
+      "summary": "Debugging snap services, systemd integration, and daemon lifecycle issues.",
+      "content_file": "skills/snap-services.md"
+    },
+    {
+      "name": "snap-debug-state",
+      "keywords": ["state", "debug", "seed", "change", "task", "error", "undone", "hold"],
+      "summary": "Inspecting snapd internal state, changes, tasks, and seed debugging.",
+      "content_file": "skills/snap-debug-state.md"
+    },
+    {
+      "name": "journalctl",
+      "keywords": ["logs", "journal", "journalctl", "snapd", "syslog", "errors", "debug"],
+      "summary": "Using journalctl effectively for snapd and snap service log analysis.",
+      "content_file": "skills/journalctl.md"
+    },
+    {
+      "name": "snap-debug-api",
+      "keywords": ["api", "rest", "socket", "snapd", "endpoint", "query", "v2", "changes", "snaps"],
+      "summary": "Making raw REST API calls to the snapd daemon socket for querying internal state, triggering operations, and debugging issues not exposed through the standard snap CLI.",
+      "content_file": "skills/snap-debug-api.md"
+    },
+    {
+      "name": "snap-debug-timings",
+      "keywords": ["timings", "performance", "slow", "duration", "seed", "download", "install", "profile"],
+      "summary": "Using snap debug timings to diagnose slow snap operations by showing detailed timing breakdowns for installs, refreshes, seeding, and other changes.",
+      "content_file": "skills/snap-debug-timings.md"
+    }
+  ]
+}

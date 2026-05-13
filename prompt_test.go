@@ -19,7 +19,7 @@ func TestBuildSystemPromptBasic(t *testing.T) {
 		Tags:        []string{"snapd", "refresh"},
 	}
 
-	prompt := BuildSystemPrompt(bug, "snapd-repro-abc123")
+	prompt := BuildSystemPrompt(bug, "snapd-repro-abc123", nil)
 
 	checks := []string{
 		"expert Ubuntu/snapd bug reproduction agent",
@@ -62,7 +62,7 @@ func TestBuildSystemPromptWithMessages(t *testing.T) {
 		},
 	}
 
-	prompt := BuildSystemPrompt(bug, "test-container")
+	prompt := BuildSystemPrompt(bug, "test-container", nil)
 
 	if !strings.Contains(prompt, "Comment #0") {
 		t.Error("missing comment #0")
@@ -99,7 +99,7 @@ func TestBuildSystemPromptWithAttachments(t *testing.T) {
 		},
 	}
 
-	prompt := BuildSystemPrompt(bug, "test-container")
+	prompt := BuildSystemPrompt(bug, "test-container", nil)
 
 	if !strings.Contains(prompt, "journal.log") {
 		t.Error("missing attachment title")
@@ -122,7 +122,7 @@ func TestBuildSystemPromptNoOptionalFields(t *testing.T) {
 		Description: "Just a description.",
 	}
 
-	prompt := BuildSystemPrompt(bug, "container-x")
+	prompt := BuildSystemPrompt(bug, "container-x", nil)
 
 	if !strings.Contains(prompt, "Bug ID:** 11111") {
 		t.Error("missing bug ID")
@@ -170,7 +170,7 @@ func TestBuildPlanningPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildPlanningPrompt(bug)
+	prompt := BuildPlanningPrompt(bug, nil)
 
 	checks := []string{
 		"expert Ubuntu/snapd bug analysis agent",
@@ -201,7 +201,7 @@ func TestBuildPlanningPromptNoAttachments(t *testing.T) {
 		Description: "No attachments.",
 	}
 
-	prompt := BuildPlanningPrompt(bug)
+	prompt := BuildPlanningPrompt(bug, nil)
 
 	if strings.Contains(prompt, "### Attachments") {
 		t.Error("should not have Attachments section when empty")
@@ -266,7 +266,7 @@ func TestBuildExecutionPrompt(t *testing.T) {
 		ExpectedResult: "snap list wraps poorly at 80 columns",
 	}
 
-	prompt := BuildExecutionPrompt(plan, "snapd-repro-xyz")
+	prompt := BuildExecutionPrompt(plan, "snapd-repro-xyz", nil)
 
 	checks := []string{
 		"expert Ubuntu/snapd bug reproduction agent",

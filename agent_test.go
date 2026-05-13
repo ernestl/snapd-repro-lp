@@ -131,6 +131,13 @@ func TestAgentSingleToolCallThenReport(t *testing.T) {
 	if !strings.Contains(logOutput, "Agent stopped by report_result") {
 		t.Errorf("log missing stop message")
 	}
+	// Check log output includes args and results (always visible).
+	if !strings.Contains(logOutput, "args:") {
+		t.Errorf("log missing tool args output")
+	}
+	if !strings.Contains(logOutput, "result:") {
+		t.Errorf("log missing tool result output")
+	}
 }
 
 func TestAgentLLMStopsWithText(t *testing.T) {
@@ -202,12 +209,22 @@ func TestAgentMaxIterations(t *testing.T) {
 
 	agent := NewAgent(llmClient, executor, AgentConfig{MaxIterations: 3})
 
-	_, err := agent.Run(context.Background(), "system", "repro")
-	if err == nil {
-		t.Fatal("expected error for max iterations")
+	result, err := agent.Run(context.Background(), "system", "repro")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "max iterations (3)") {
-		t.Errorf("error = %q, want 'max iterations'", err.Error())
+	if !result.MaxIterationsReached {
+		t.Error("expected MaxIterationsReached = true")
+	}
+	if result.StoppedByTool != "" {
+		t.Errorf("StoppedByTool = %q, want empty", result.StoppedByTool)
+	}
+	// Recent activity should mention the tool calls.
+	if !strings.Contains(result.RecentActivity, "run_command") {
+		t.Errorf("RecentActivity should mention run_command, got: %q", result.RecentActivity)
+	}
+	if !strings.Contains(result.RecentActivity, "looping") {
+		t.Errorf("RecentActivity should include tool output, got: %q", result.RecentActivity)
 	}
 }
 
