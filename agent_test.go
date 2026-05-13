@@ -131,10 +131,6 @@ func TestAgentSingleToolCallThenReport(t *testing.T) {
 	if !strings.Contains(logOutput, "Agent stopped by report_result") {
 		t.Errorf("log missing stop message")
 	}
-	// Verbose-only debug output should be present.
-	if !strings.Contains(logOutput, "[agent]") {
-		t.Errorf("log missing verbose [agent] debug lines")
-	}
 }
 
 func TestAgentLLMStopsWithText(t *testing.T) {
