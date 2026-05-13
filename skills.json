@@ -41,6 +41,12 @@
       "keywords": ["timings", "performance", "slow", "duration", "seed", "download", "install", "profile"],
       "summary": "Using snap debug timings to diagnose slow snap operations by showing detailed timing breakdowns for installs, refreshes, seeding, and other changes.",
       "content_file": "skills/snap-debug-timings.md"
+    },
+    {
+      "name": "lxd",
+      "keywords": ["container", "lxd", "lxc", "vm", "virtual-machine", "nested", "instance", "launch"],
+      "summary": "Launching and managing LXD instances (VMs, containers, and nested containers) for bug reproduction.",
+      "content_file": "skills/lxd.md"
     }
   ]
 }
