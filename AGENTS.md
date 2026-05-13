@@ -2,6 +2,10 @@
 
 Rules for AI agents generating or modifying code in this repository.
 
+## General
+
+Purpose of the project is written out in README.md and DESIGN.md.
+
 ## Go Version
 
 Use the Go version specified in `go.mod`. Do not upgrade or change it without justification.
