@@ -83,14 +83,14 @@ func (t *RunCommandTool) Execute(argsJSON string) (*ToolResult, error) {
 	}
 
 	output := result.Output
-	if result.ExitCode != 0 {
-		output += fmt.Sprintf("\n[exit code: %d]", result.ExitCode)
-	}
-
 	// Truncate very long output to avoid blowing up context.
 	const maxOutput = 50000
 	if len(output) > maxOutput {
 		output = output[:maxOutput] + "\n...[truncated]"
+	}
+
+	if result.ExitCode != 0 {
+		output += fmt.Sprintf("\n[exit code: %d]", result.ExitCode)
 	}
 
 	return &ToolResult{Output: output}, nil
