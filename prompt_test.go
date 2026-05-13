@@ -90,7 +90,7 @@ func TestBuildSystemPromptWithAttachments(t *testing.T) {
 			{
 				Title:    "journal.log",
 				Type:     "Patch",
-				FilePath: "/tmp/bug-55555/journal.log",
+				FilePath: "/tmp/bug-55555/attachments/journal.log",
 			},
 			{
 				Title: "screenshot.png",
@@ -104,8 +104,8 @@ func TestBuildSystemPromptWithAttachments(t *testing.T) {
 	if !strings.Contains(prompt, "journal.log") {
 		t.Error("missing attachment title")
 	}
-	if !strings.Contains(prompt, "/tmp/bug-55555/journal.log") {
-		t.Error("missing attachment file path")
+	if !strings.Contains(prompt, "file: journal.log") {
+		t.Error("should show base filename, not full path")
 	}
 	if !strings.Contains(prompt, "screenshot.png") {
 		t.Error("missing second attachment")

@@ -97,13 +97,9 @@ func fetchAndPrepareBug(cmd *cobra.Command, bugRef string) (*Bug, string, error)
 
 	// Download attachments into the bug directory.
 	if len(bug.Attachments) > 0 {
-		if err := DownloadAttachments(bug.Attachments, bugDir); err != nil {
+		attachmentsDir := filepath.Join(bugDir, "attachments")
+		if err := DownloadAttachments(bug.Attachments, attachmentsDir); err != nil {
 			return nil, "", fmt.Errorf("downloading attachments: %w", err)
-		}
-		for _, a := range bug.Attachments {
-			if a.FilePath != "" {
-				_, _ = fmt.Fprintf(out, "Downloaded: %s\n", a.FilePath)
-			}
 		}
 	}
 
@@ -135,9 +131,16 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 	out := cmd.OutOrStdout()
 
 	// Build planning tools.
-	readFile := NewReadFileTool(bugDir)
+	attachmentsDir := filepath.Join(bugDir, "attachments")
+	var readFile *ReadFileTool
+	if len(bug.Attachments) > 0 {
+		readFile = NewReadFileTool(attachmentsDir)
+	}
 	reportPlan := NewReportPlanTool()
-	executor := NewToolExecutor(readFile, reportPlan)
+	executor := NewToolExecutor(reportPlan)
+	if readFile != nil {
+		executor = NewToolExecutor(readFile, reportPlan)
+	}
 
 	// Build LLM client and agent.
 	llmClient := NewLLMClient(apiKey, modelName)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -68,7 +69,7 @@ func writeBugReport(b *strings.Builder, bug *Bug) {
 		for _, att := range bug.Attachments {
 			fmt.Fprintf(b, "- **%s** (type: %s)", att.Title, att.Type)
 			if att.FilePath != "" {
-				fmt.Fprintf(b, " — file: %s", att.FilePath)
+				fmt.Fprintf(b, " — file: %s", filepath.Base(att.FilePath))
 			}
 			b.WriteString("\n")
 		}
