@@ -107,7 +107,12 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 
 				result, err := a.executor.Execute(tc.Function.Name, tc.Function.Arguments)
 				if err != nil {
-					return nil, fmt.Errorf("iteration %d: tool %s: %w", i+1, tc.Function.Name, err)
+					a.progressf("[%d/%d] Tool error (%s): %s", i+1, maxIter, tc.Function.Name, err.Error())
+					// Feed the error back to the LLM as a tool result message,
+					// so it can adapt and try a different approach.
+					errorContent := fmt.Sprintf("error executing tool %s: %s", tc.Function.Name, err.Error())
+					messages = append(messages, ToolResultMessage(tc.ID, tc.Function.Name, errorContent))
+					continue
 				}
 
 				// Append the tool result message.
