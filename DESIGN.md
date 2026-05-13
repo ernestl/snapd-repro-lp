@@ -42,8 +42,8 @@ Fetches bug data from the Launchpad REST API:
 - Messages with pagination
 - Attachments with deduplication (filename collisions get `_1`, `_2` suffixes)
 
-All data is saved to a `bug-<id>/` directory with a JSON summary and downloaded
-attachment files.
+All data is saved to a `bug-<id>/` directory with a JSON summary in the root
+and downloaded attachment files in a `bug-<id>/attachments/` subdirectory.
 
 ### LLM Client (`llm.go`)
 
@@ -74,8 +74,9 @@ Tools implement the `Tool` interface (`Name`, `Definition`, `Execute`) and are
 registered with a `ToolExecutor` that dispatches by name.
 
 **Planning phase tools:**
-- `read_file` -- Read a file from the bug directory. Sandboxed: path traversal
-  outside the bug directory is rejected. Files larger than 100KB are truncated.
+- `read_file` -- Read a file or list a directory within `bug-<id>/attachments/`.
+  Sandboxed: path traversal outside the attachments directory is rejected.
+  Directories are listed with their entries; files larger than 100KB are truncated.
 - `report_plan` -- Submit a structured reproduction plan (`ReproPlan`). Sets
   `StopAgent: true`.
 
@@ -132,12 +133,13 @@ snapd-repro-lp test lxd delete <name>
 Launchpad API
      |
      v
-  bug-<id>/
-  +-- bug-<id>.json       (bug metadata + messages)
-  +-- <attachments>...    (downloaded files)
-  +-- plan.json           (from planning phase)
-  +-- result.json         (from execution phase)
-  +-- reproducer.sh       (extracted script)
+bug-<id>/
+   +-- bug-<id>.json       (bug metadata + messages)
+   +-- attachments/
+   |   +-- <files>...      (downloaded attachments)
+   +-- plan.json           (from planning phase)
+   +-- result.json         (from execution phase)
+   +-- reproducer.sh       (extracted script)
 ```
 
 ## Dependencies
@@ -154,8 +156,10 @@ Launchpad API
 - **Agent is tool-agnostic** -- `NewAgent` takes an `LLMClient` and
   `ToolExecutor`, not specific tool types. Any tool can stop the loop by setting
   `StopAgent: true`. The caller reads structured output from the tool directly.
-- **`read_file` is sandboxed** -- the planning LLM can only read files within
-  the bug directory. Path escape attempts are rejected.
+- **`read_file` is sandboxed to `attachments/`** -- the planning LLM can only
+  read files within `bug-<id>/attachments/`. The bug JSON and runtime artifacts
+  in the `bug-<id>/` root are not visible to the LLM. Path escape attempts are
+  rejected.
 - **LXD via CLI, not API** -- shelling out to `lxc` is simpler and avoids the
   LXD Go client dependency. The `ContainerManager` interface keeps it testable.
 - **Ubuntu version from LLM** -- the planning LLM infers the Ubuntu version from
