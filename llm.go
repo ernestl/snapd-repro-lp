@@ -101,7 +101,7 @@ type LLMClient struct {
 
 // NewLLMClient creates a new LLM client for the OpenRouter API.
 // apiKey is the OpenRouter API key. model is the model identifier
-// (e.g. "anthropic/claude-sonnet-4").
+// (e.g. "deepseek/deepseek-v4-pro").
 func NewLLMClient(apiKey, model string) *LLMClient {
 	return &LLMClient{
 		apiKey:  apiKey,

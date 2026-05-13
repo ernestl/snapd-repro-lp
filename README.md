@@ -38,8 +38,8 @@ sudo ./setup.sh
 # Set your OpenRouter API key
 export OPENROUTER_API_KEY="sk-or-..."
 
-# Optionally set the model (defaults to anthropic/claude-sonnet-4)
-export OPENROUTER_MODEL="anthropic/claude-sonnet-4"
+# Optionally set the model (defaults to deepseek/deepseek-v4-pro)
+export OPENROUTER_MODEL="deepseek/deepseek-v4-pro"
 ```
 
 ## Quick Start
@@ -75,7 +75,7 @@ Attachments: 0
 Saved bug data to bug-1662786/bug-1662786.json
 Saved planning prompt to bug-1662786/planning-prompt.html
 
-Planning reproduction (model: anthropic/claude-sonnet-4)...
+Planning reproduction (model: deepseek/deepseek-v4-pro)...
 [1/60] Waiting for LLM response...
 [1/60] Tool: report_plan
   args: {"ubuntu_version":"24.04","instance_type":"container",...}
@@ -97,7 +97,7 @@ Run the plan with:
 ## Options
 
 ```
---model string    LLM model via OpenRouter (default "anthropic/claude-sonnet-4")
+--model string    LLM model via OpenRouter (default "deepseek/deepseek-v4-pro")
                   Can also be set via OPENROUTER_MODEL environment variable.
 --max-iter int    Maximum agent iterations (default 60)
 -v, --verbose     Show detailed LLM debug output

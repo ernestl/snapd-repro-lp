@@ -49,7 +49,7 @@ and downloaded attachment files in a `bug-<id>/attachments/` subdirectory.
 
 Raw HTTP client for the OpenRouter API (OpenAI-compatible). No streaming --
 simple request/response. Configurable model via `--model` flag, defaults to
-`anthropic/claude-sonnet-4`. Includes a 5-minute HTTP timeout.
+`deepseek/deepseek-v4-pro`. Includes a 5-minute HTTP timeout.
 
 ### Agent Loop (`agent.go`)
 

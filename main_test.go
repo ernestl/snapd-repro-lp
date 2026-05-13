@@ -163,7 +163,7 @@ func TestModelDefault(t *testing.T) {
 	modelName = ""
 	t.Setenv("OPENROUTER_MODEL", "")
 	resolveModel()
-	if modelName != "anthropic/claude-sonnet-4" {
-		t.Errorf("model = %q, want %q", modelName, "anthropic/claude-sonnet-4")
+	if modelName != "deepseek/deepseek-v4-pro" {
+		t.Errorf("model = %q, want %q", modelName, "deepseek/deepseek-v4-pro")
 	}
 }

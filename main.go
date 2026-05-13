@@ -43,7 +43,7 @@ func resolveModel() {
 		if env := os.Getenv("OPENROUTER_MODEL"); env != "" {
 			modelName = env
 		} else {
-			modelName = "anthropic/claude-sonnet-4"
+			modelName = "deepseek/deepseek-v4-pro"
 		}
 	}
 }
