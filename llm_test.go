@@ -49,7 +49,7 @@ func TestChatCompletionTextResponse(t *testing.T) {
 			Usage: &Usage{PromptTokens: 10, CompletionTokens: 8, TotalTokens: 18},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 	defer ts.Close()
 
@@ -116,7 +116,7 @@ func TestChatCompletionToolCall(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 	defer ts.Close()
 
@@ -175,7 +175,7 @@ func TestChatCompletionUnauthorized(t *testing.T) {
 	ts, client := newLLMTestServer(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(apiError{
+		_ = json.NewEncoder(w).Encode(apiError{
 			Error: struct {
 				Code    interface{} `json:"code"`
 				Message string      `json:"message"`
@@ -214,7 +214,7 @@ func TestChatCompletionErrorBody(t *testing.T) {
 	ts, client := newLLMTestServer(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(apiError{
+		_ = json.NewEncoder(w).Encode(apiError{
 			Error: struct {
 				Code    interface{} `json:"code"`
 				Message string      `json:"message"`

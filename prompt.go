@@ -35,15 +35,15 @@ var UbuntuCodenames = map[string]string{
 // This is shared between the planning and execution prompts.
 func writeBugReport(b *strings.Builder, bug *Bug) {
 	b.WriteString("## Bug Report\n\n")
-	b.WriteString(fmt.Sprintf("**Bug ID:** %d\n", bug.ID))
-	b.WriteString(fmt.Sprintf("**Title:** %s\n", bug.Title))
+	fmt.Fprintf(b, "**Bug ID:** %d\n", bug.ID)
+	fmt.Fprintf(b, "**Title:** %s\n", bug.Title)
 	if bug.WebLink != "" {
-		b.WriteString(fmt.Sprintf("**URL:** %s\n", bug.WebLink))
+		fmt.Fprintf(b, "**URL:** %s\n", bug.WebLink)
 	}
 	if len(bug.Tags) > 0 {
-		b.WriteString(fmt.Sprintf("**Tags:** %s\n", strings.Join(bug.Tags, ", ")))
+		fmt.Fprintf(b, "**Tags:** %s\n", strings.Join(bug.Tags, ", "))
 	}
-	b.WriteString(fmt.Sprintf("\n### Description\n\n%s\n", bug.Description))
+	fmt.Fprintf(b, "\n### Description\n\n%s\n", bug.Description)
 
 	// Messages/comments.
 	if len(bug.Messages) > 0 {
@@ -53,9 +53,9 @@ func writeBugReport(b *strings.Builder, bug *Bug) {
 			if author == "" {
 				author = "unknown"
 			}
-			b.WriteString(fmt.Sprintf("**Comment #%d** by %s (%s):\n", i, author, msg.DateCreated))
+			fmt.Fprintf(b, "**Comment #%d** by %s (%s):\n", i, author, msg.DateCreated)
 			if msg.Subject != "" && msg.Subject != bug.Title {
-				b.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
+				fmt.Fprintf(b, "Subject: %s\n", msg.Subject)
 			}
 			b.WriteString(msg.Content)
 			b.WriteString("\n\n")
@@ -66,9 +66,9 @@ func writeBugReport(b *strings.Builder, bug *Bug) {
 	if len(bug.Attachments) > 0 {
 		b.WriteString("### Attachments\n\n")
 		for _, att := range bug.Attachments {
-			b.WriteString(fmt.Sprintf("- **%s** (type: %s)", att.Title, att.Type))
+			fmt.Fprintf(b, "- **%s** (type: %s)", att.Title, att.Type)
 			if att.FilePath != "" {
-				b.WriteString(fmt.Sprintf(" — file: %s", att.FilePath))
+				fmt.Fprintf(b, " — file: %s", att.FilePath)
 			}
 			b.WriteString("\n")
 		}
@@ -88,7 +88,7 @@ func writeCodenameTable(b *strings.Builder) {
 	}
 	for _, name := range order {
 		if ver, ok := UbuntuCodenames[name]; ok {
-			b.WriteString(fmt.Sprintf("- %s = %s\n", name, ver))
+			fmt.Fprintf(b, "- %s = %s\n", name, ver)
 		}
 	}
 	b.WriteString("\n")
@@ -199,15 +199,15 @@ func BuildExecutionPrompt(plan *ReproPlan, containerName string) string {
 
 	// Include the plan.
 	b.WriteString("## Reproduction Plan\n\n")
-	b.WriteString(fmt.Sprintf("**Bug ID:** %d\n", plan.BugID))
-	b.WriteString(fmt.Sprintf("**Title:** %s\n", plan.Title))
-	b.WriteString(fmt.Sprintf("**Ubuntu Version:** %s\n", plan.UbuntuVersion))
-	b.WriteString(fmt.Sprintf("**Expected Result:** %s\n", plan.ExpectedResult))
+	fmt.Fprintf(&b, "**Bug ID:** %d\n", plan.BugID)
+	fmt.Fprintf(&b, "**Title:** %s\n", plan.Title)
+	fmt.Fprintf(&b, "**Ubuntu Version:** %s\n", plan.UbuntuVersion)
+	fmt.Fprintf(&b, "**Expected Result:** %s\n", plan.ExpectedResult)
 
 	b.WriteString("\n### Steps\n\n")
 	for i, step := range plan.Steps {
-		b.WriteString(fmt.Sprintf("**Step %d:** %s\n", i+1, step.Description))
-		b.WriteString(fmt.Sprintf("```bash\n%s\n```\n\n", step.Command))
+		fmt.Fprintf(&b, "**Step %d:** %s\n", i+1, step.Description)
+		fmt.Fprintf(&b, "```bash\n%s\n```\n\n", step.Command)
 	}
 
 	return b.String()

@@ -139,7 +139,7 @@ func (c *LLMClient) ChatCompletion(ctx context.Context, messages []ChatMessage, 
 	if err != nil {
 		return nil, fmt.Errorf("sending request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		// Try to parse an API error message from the response body.

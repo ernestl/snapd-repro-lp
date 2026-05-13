@@ -83,7 +83,7 @@ func handleLXCHelper(args []string) {
 		if len(remaining) >= 2 && remaining[0] == "bash" && remaining[1] == "-c" {
 			command := remaining[2]
 			if behavior == "exec_fail" {
-				fmt.Fprintf(os.Stdout, "command not found: %s\n", command)
+				_, _ = fmt.Fprintf(os.Stdout, "command not found: %s\n", command)
 				os.Exit(127)
 			}
 			fmt.Printf("executed: %s\n", command)
@@ -271,7 +271,7 @@ func TestGenerateContainerName(t *testing.T) {
 		t.Errorf("suffix length = %d, want 6", len(suffix))
 	}
 	for _, c := range suffix {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
 			t.Errorf("suffix contains invalid char %q", string(c))
 		}
 	}

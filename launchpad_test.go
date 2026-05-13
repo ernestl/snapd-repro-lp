@@ -16,36 +16,32 @@ type testServerOpts struct {
 	fileData    map[string]string // path suffix -> content for attachment data endpoints
 }
 
-func newTestServer(bug *bugResponse, msgs messagesResponse) *httptest.Server {
-	return newTestServerWithOpts(testServerOpts{bug: bug, msgs: msgs})
-}
-
 func newTestServerWithOpts(opts testServerOpts) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/bugs/12345", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(opts.bug)
+		_ = json.NewEncoder(w).Encode(opts.bug)
 	})
 	mux.HandleFunc("/bugs/12345/messages", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(opts.msgs)
+		_ = json.NewEncoder(w).Encode(opts.msgs)
 	})
 	if opts.attachments != nil {
 		mux.HandleFunc("/bugs/12345/attachments", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(opts.attachments)
+			_ = json.NewEncoder(w).Encode(opts.attachments)
 		})
 	} else {
 		// Return empty collection by default.
 		mux.HandleFunc("/bugs/12345/attachments", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(attachmentsResponse{})
+			_ = json.NewEncoder(w).Encode(attachmentsResponse{})
 		})
 	}
 	for path, content := range opts.fileData {
 		content := content // capture
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte(content))
+			_, _ = w.Write([]byte(content))
 		})
 	}
 	return httptest.NewServer(mux)
@@ -206,7 +202,7 @@ func TestFetchAttachmentMetadata(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/attachments", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(attachments)
+		json.NewEncoder(w).Encode(attachments) //nolint:errcheck
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
@@ -233,7 +229,7 @@ func TestFetchAttachmentMetadataEmpty(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/attachments", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(attachmentsResponse{})
+		json.NewEncoder(w).Encode(attachmentsResponse{}) //nolint:errcheck
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
@@ -250,10 +246,10 @@ func TestFetchAttachmentMetadataEmpty(t *testing.T) {
 func TestDownloadAttachments(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/files/debug.log", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("some debug output"))
+		_, _ = w.Write([]byte("some debug output"))
 	})
 	mux.HandleFunc("/files/state.json", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"key":"value"}`))
+		_, _ = w.Write([]byte(`{"key":"value"}`))
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
@@ -295,10 +291,10 @@ func TestDownloadAttachments(t *testing.T) {
 func TestDownloadAttachmentsDeduplication(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/files/a", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("first"))
+		_, _ = w.Write([]byte("first"))
 	})
 	mux.HandleFunc("/files/b", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("second"))
+		_, _ = w.Write([]byte("second"))
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()

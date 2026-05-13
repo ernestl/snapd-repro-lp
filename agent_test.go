@@ -22,7 +22,9 @@ func mockLLMServer(t *testing.T, responses []ChatResponse) (*httptest.Server, *L
 			t.Fatalf("unexpected LLM call #%d (only %d responses configured)", callIndex+1, len(responses))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(responses[callIndex])
+		if err := json.NewEncoder(w).Encode(responses[callIndex]); err != nil {
+			t.Errorf("encoding response: %v", err)
+		}
 		callIndex++
 	}))
 	client := NewLLMClient("test-key", "test-model")

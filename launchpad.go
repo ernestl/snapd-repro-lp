@@ -216,7 +216,7 @@ func downloadFile(url, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
@@ -226,12 +226,12 @@ func downloadFile(url, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
 	if _, err := io.Copy(f, resp.Body); err != nil {
+		_ = f.Close()
 		return err
 	}
-	return nil
+	return f.Close()
 }
 
 func authorFromLink(link string) string {
@@ -253,7 +253,7 @@ func getJSON(url string, v interface{}) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)

@@ -137,13 +137,13 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 
 // progressf always prints progress messages to the output writer.
 func (a *Agent) progressf(format string, args ...interface{}) {
-	fmt.Fprintf(a.output, format+"\n", args...)
+	_, _ = fmt.Fprintf(a.output, format+"\n", args...)
 }
 
 // logf prints debug messages only when verbose mode is enabled.
 func (a *Agent) logf(format string, args ...interface{}) {
 	if a.config.Verbose {
-		fmt.Fprintf(a.output, "[agent] "+format+"\n", args...)
+		_, _ = fmt.Fprintf(a.output, "[agent] "+format+"\n", args...)
 	}
 }
 
