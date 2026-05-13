@@ -1,10 +1,10 @@
 # snapd-repro-lp
 
-Automatically reproduce snapd bugs from Launchpad using LLM-driven analysis and LXD containers.
+Automatically reproduce snapd bugs from Launchpad using LLM-driven analysis and LXD VMs.
 
-Given a Launchpad bug number, the tool fetches the bug report, uses an LLM to
-plan a reproduction strategy, then executes it inside a disposable LXD
-container.
+Given a Launchpad bug number, the tool fetches the bug report, launches an LXD
+VM, uses an LLM to plan a reproduction strategy (with VM access for
+investigation), then executes it inside the VM.
 
 ## Development
 
@@ -59,39 +59,46 @@ export OPENROUTER_MODEL="deepseek/deepseek-v4-pro"
 # Review the plan
 cat bug-1662786/plan.json
 
-# Execute the plan in an LXD container
+# Execute the plan in an LXD VM
 ./snapd-repro-lp exec 1662786
 ```
 
 ### Example output
 
 ```
-$ ./snapd-repro-lp plan 1662786
-Bug #1662786: snap list/find output is hard to read in a standard 80 column terminal
-URL: https://bugs.launchpad.net/snapd/+bug/1662786
-Tags: [snapd-snap]
-Messages: 5
-Attachments: 0
-Saved bug data to bug-1662786/bug-1662786.json
-Saved planning prompt to bug-1662786/planning-prompt.html
+$ ./snapd-repro-lp reproduce 1662786
+Step 1/4: Fetching bug #1662786...
+  Description: snap list/find output is hard to read in a standard 80 column terminal
+  Link: https://bugs.launchpad.net/snapd/+bug/1662786
+  Tags: [snapd-snap]
+  Messages: 5, Attachments: 0
+  Saved bug data to bug-1662786/bug-1662786.json
 
-Planning reproduction (model: deepseek/deepseek-v4-pro)...
-[1/60] Waiting for LLM response...
-[1/60] Tool: report_plan
-  args: {"ubuntu_version":"24.04","instance_type":"container",...}
-  result: {"status":"ok"}
-[1/60] Agent stopped by report_plan
+Step 2/4: Launching VM snapd-repro-a1b2c3 (ubuntu:24.04)...
 
-=== Reproduction Plan ===
-Ubuntu version: 24.04
-Steps: 10
-  1. Check snap version
-     $ snap version
-  ...
-Saved plan to bug-1662786/plan.json
+Step 3/4: Planning reproduction (model: deepseek/deepseek-v4-pro)...
+  Generated planning prompt: bug-1662786/planning-prompt.html
+  [1/60] Waiting for LLM response...
+  [1/60] run_command: snap version
+  [2/60] Waiting for LLM response...
+  [2/60] LLM reported plan
+  Saved plan to bug-1662786/plan.json
 
-Run the plan with:
-  snapd-repro-lp exec 1662786
+Step 4/4: Executing plan (model: deepseek/deepseek-v4-pro)...
+  Generated execution prompt: bug-1662786/execution-prompt.html
+  [1/60] Waiting for LLM response...
+  [1/60] run_command: apt-get update
+  [1/60] run_command: COLUMNS=80 snap list
+  [2/60] Waiting for LLM response...
+  [2/60] LLM reported result
+
+  Status: REPRODUCED
+  Explanation: The snap list output wraps incorrectly at 80 columns...
+  Saved reproducer script to bug-1662786/reproducer.sh
+  Saved result to bug-1662786/result.json
+  Cleaning up VM snapd-repro-a1b2c3...
+
+Token usage: 5200 prompt + 1800 completion = 7000 total
 ```
 
 ## Options
@@ -100,7 +107,7 @@ Run the plan with:
 --model string    LLM model via OpenRouter (default "deepseek/deepseek-v4-pro")
                   Can also be set via OPENROUTER_MODEL environment variable.
 --max-iter int    Maximum agent iterations (default 60)
--v, --verbose     Show detailed LLM debug output
+-v, --verbose     Show full tool request/output detail
 ```
 
 **plan flags:**

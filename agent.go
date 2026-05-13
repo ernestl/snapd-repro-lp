@@ -46,6 +46,10 @@ type Agent struct {
 
 	// TotalUsage tracks cumulative token usage across all iterations.
 	TotalUsage Usage
+
+	// log captures the full verbose interaction log regardless of
+	// the Verbose flag. Retrieved via Log() after Run() completes.
+	log strings.Builder
 }
 
 // NewAgent creates a new Agent.
@@ -228,16 +232,22 @@ func summariseRecentActivity(messages []ChatMessage) string {
 	return b.String()
 }
 
-// progressf always prints progress messages to the output writer.
+// progressf always prints progress messages to the output writer and
+// records them in the interaction log.
 func (a *Agent) progressf(format string, args ...interface{}) {
-	_, _ = fmt.Fprintf(a.output, a.prefix+format+"\n", args...)
+	line := fmt.Sprintf(a.prefix+format, args...)
+	_, _ = fmt.Fprintln(a.output, line)
+	fmt.Fprintln(&a.log, line)
 }
 
-// verbosef prints detail messages only when verbose mode is enabled.
+// verbosef prints detail messages only when verbose mode is enabled,
+// but always records them in the interaction log.
 func (a *Agent) verbosef(format string, args ...interface{}) {
+	line := fmt.Sprintf(a.prefix+format, args...)
 	if a.config.Verbose {
-		_, _ = fmt.Fprintf(a.output, a.prefix+format+"\n", args...)
+		_, _ = fmt.Fprintln(a.output, line)
 	}
+	fmt.Fprintln(&a.log, line)
 }
 
 // logf prints debug messages only when verbose mode is enabled.
@@ -245,6 +255,13 @@ func (a *Agent) logf(format string, args ...interface{}) {
 	if a.config.Verbose {
 		_, _ = fmt.Fprintf(a.output, a.prefix+"[agent] "+format+"\n", args...)
 	}
+}
+
+// Log returns the full interaction log captured during Run(). This
+// includes all progress lines and verbose detail (tool requests and
+// outputs) regardless of the Verbose setting.
+func (a *Agent) Log() string {
+	return a.log.String()
 }
 
 // truncate returns s truncated to maxLen with "..." appended if needed.

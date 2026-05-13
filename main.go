@@ -165,12 +165,12 @@ func fetchAndPrepareBug(cmd *cobra.Command, bugRef string, step, totalSteps int)
 
 // --- helper: run the planning agent ---
 
-func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir string, instance InstanceManager) (*ReproPlan, *Usage, error) {
+func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir string, instance InstanceManager) (*ReproPlan, *Usage, string, error) {
 	resolveModel()
 
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
-		return nil, nil, fmt.Errorf("OPENROUTER_API_KEY environment variable is not set")
+		return nil, nil, "", fmt.Errorf("OPENROUTER_API_KEY environment variable is not set")
 	}
 
 	out := cmd.OutOrStdout()
@@ -214,7 +214,7 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 
 	result, err := agent.Run(ctx, systemPrompt, userMessage)
 	if err != nil {
-		return nil, nil, fmt.Errorf("planning agent failed: %w", err)
+		return nil, nil, agent.Log(), fmt.Errorf("planning agent failed: %w", err)
 	}
 
 	// The agent returned via report_plan → reportPlan.Plan is set.
@@ -224,21 +224,21 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 		plan.Title = bug.Title
 		plan.ModelUsed = modelName
 
-		return plan, &agent.TotalUsage, nil
+		return plan, &agent.TotalUsage, agent.Log(), nil
 	}
 
 	// Fallback: agent stopped without calling report_plan.
-	return nil, nil, fmt.Errorf("planning agent did not produce a plan. Last output: %s", result.LastMessage)
+	return nil, nil, agent.Log(), fmt.Errorf("planning agent did not produce a plan. Last output: %s", result.LastMessage)
 }
 
 // --- helper: run the execution agent ---
 
-func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan, bugDir string, instance InstanceManager) (*ReproResult, *Usage, error) {
+func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan, bugDir string, instance InstanceManager) (*ReproResult, *Usage, string, error) {
 	resolveModel()
 
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
-		return nil, nil, fmt.Errorf("OPENROUTER_API_KEY environment variable is not set")
+		return nil, nil, "", fmt.Errorf("OPENROUTER_API_KEY environment variable is not set")
 	}
 
 	out := cmd.OutOrStdout()
@@ -273,12 +273,12 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 
 	result, err := agent.Run(ctx, systemPrompt, userMessage)
 	if err != nil {
-		return nil, nil, fmt.Errorf("execution agent failed: %w", err)
+		return nil, nil, agent.Log(), fmt.Errorf("execution agent failed: %w", err)
 	}
 
 	// Extract the structured result from the report_result tool.
 	if result.StoppedByTool == "report_result" && reportResult.Result != nil {
-		return reportResult.Result, &agent.TotalUsage, nil
+		return reportResult.Result, &agent.TotalUsage, agent.Log(), nil
 	}
 
 	// Fallback: agent stopped without calling report_result.
@@ -299,7 +299,7 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 		Reproduced:  false,
 		Explanation: explanation,
 	}
-	return fallback, &agent.TotalUsage, nil
+	return fallback, &agent.TotalUsage, agent.Log(), nil
 }
 
 // --- helper: print and save execution result ---
@@ -329,6 +329,20 @@ func saveExecutionResult(cmd *cobra.Command, result *ReproResult, bugDir string)
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", yellow(fmt.Sprintf("warning: failed to write result: %v", err)))
 	} else {
 		_, _ = fmt.Fprintf(out, "  Saved result to %s\n", blue(fileHyperlink(resultFile)))
+	}
+}
+
+// saveAgentLog writes an agent interaction log to the given file and
+// prints a link. If the log is empty or writing fails, it warns.
+func saveAgentLog(cmd *cobra.Command, log, path string) {
+	if log == "" {
+		return
+	}
+	out := cmd.OutOrStdout()
+	if err := os.WriteFile(path, []byte(log), 0644); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", yellow(fmt.Sprintf("warning: failed to write log: %v", err)))
+	} else {
+		_, _ = fmt.Fprintf(out, "  Saved agent log to %s\n", blue(fileHyperlink(path)))
 	}
 }
 
@@ -365,7 +379,8 @@ Requires OPENROUTER_API_KEY to be set.`,
 		resolveModel()
 		_, _ = fmt.Fprintf(out, "\n%s Planning reproduction (model: %s)...\n", boldCyan("Step 3/3:"), modelName)
 
-		plan, planUsage, err := runPlanningAgent(ctx, cmd, bug, bugDir, instance)
+		plan, planUsage, planLog, err := runPlanningAgent(ctx, cmd, bug, bugDir, instance)
+		saveAgentLog(cmd, planLog, filepath.Join(bugDir, "planning-log.txt"))
 		if err != nil {
 			return err
 		}
@@ -449,7 +464,8 @@ Requires OPENROUTER_API_KEY to be set.`,
 		resolveModel()
 		_, _ = fmt.Fprintf(out, "\n%s Executing plan (model: %s)...\n", boldCyan("Step 3/3:"), modelName)
 
-		result, usage, err := runExecutionAgent(ctx, cmd, plan, bugDir, instance)
+		result, usage, execLog, err := runExecutionAgent(ctx, cmd, plan, bugDir, instance)
+		saveAgentLog(cmd, execLog, filepath.Join(bugDir, "execution-log.txt"))
 		if err != nil {
 			return err
 		}
@@ -509,7 +525,8 @@ Requires OPENROUTER_API_KEY to be set.`,
 		resolveModel()
 		_, _ = fmt.Fprintf(out, "\n%s Planning reproduction (model: %s)...\n", boldCyan("Step 3/4:"), modelName)
 
-		plan, planUsage, err := runPlanningAgent(ctx, cmd, bug, bugDir, instance)
+		plan, planUsage, planLog, err := runPlanningAgent(ctx, cmd, bug, bugDir, instance)
+		saveAgentLog(cmd, planLog, filepath.Join(bugDir, "planning-log.txt"))
 		if err != nil {
 			return err
 		}
@@ -543,7 +560,8 @@ Requires OPENROUTER_API_KEY to be set.`,
 		// Phase 2: Execute.
 		_, _ = fmt.Fprintf(out, "\n%s Executing plan (model: %s)...\n", boldCyan("Step 4/4:"), modelName)
 
-		result, execUsage, err := runExecutionAgent(ctx, cmd, plan, bugDir, instance)
+		result, execUsage, execLog, err := runExecutionAgent(ctx, cmd, plan, bugDir, instance)
+		saveAgentLog(cmd, execLog, filepath.Join(bugDir, "execution-log.txt"))
 		if err != nil {
 			return err
 		}

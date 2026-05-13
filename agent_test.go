@@ -368,6 +368,90 @@ func TestAgentVerboseOff(t *testing.T) {
 	}
 }
 
+func TestAgentLogCapturesVerboseWhenOff(t *testing.T) {
+	responses := []ChatResponse{
+		// LLM calls run_command, then report_result.
+		{
+			Choices: []Choice{{
+				FinishReason: "tool_calls",
+				Message: ChatMessage{
+					Role: RoleAssistant,
+					ToolCalls: []ToolCall{{
+						ID:   "call_1",
+						Type: "function",
+						Function: FunctionCall{
+							Name:      "run_command",
+							Arguments: `{"command":"echo hello"}`,
+						},
+					}},
+				},
+			}},
+		},
+		{
+			Choices: []Choice{{
+				FinishReason: "tool_calls",
+				Message: ChatMessage{
+					Role: RoleAssistant,
+					ToolCalls: []ToolCall{{
+						ID:   "call_2",
+						Type: "function",
+						Function: FunctionCall{
+							Name:      "report_result",
+							Arguments: `{"reproduced":true,"explanation":"works","script":"#!/bin/bash\necho ok"}`,
+						},
+					}},
+				},
+			}},
+		},
+	}
+
+	ts, llmClient := mockLLMServer(t, responses)
+	defer ts.Close()
+
+	mc := &mockInstance{
+		name: "test-vm",
+		execFunc: func(command string) (*ExecResult, error) {
+			return &ExecResult{Output: "hello\n", ExitCode: 0}, nil
+		},
+	}
+
+	var logBuf bytes.Buffer
+	runCmd := NewRunCommandTool(mc)
+	reportTool := NewReportResultTool()
+	executor := NewToolExecutor(runCmd, reportTool)
+	agent := NewAgent(llmClient, executor, AgentConfig{
+		MaxIterations: 10,
+		Verbose:       false, // verbose off
+		Output:        &logBuf,
+	})
+
+	_, err := agent.Run(context.Background(), "system", "repro")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Console output (logBuf) should NOT contain verbose detail.
+	consoleOutput := logBuf.String()
+	if strings.Contains(consoleOutput, "request:") {
+		t.Errorf("console should not contain verbose request detail when Verbose=false")
+	}
+
+	// But agent.Log() should contain the full verbose detail.
+	fullLog := agent.Log()
+	if !strings.Contains(fullLog, "request:") {
+		t.Errorf("agent.Log() missing request detail, got: %s", fullLog)
+	}
+	if !strings.Contains(fullLog, "output:") {
+		t.Errorf("agent.Log() missing output detail, got: %s", fullLog)
+	}
+	if !strings.Contains(fullLog, "run_command: echo hello") {
+		t.Errorf("agent.Log() missing tool summary, got: %s", fullLog)
+	}
+	if !strings.Contains(fullLog, "LLM reported result") {
+		t.Errorf("agent.Log() missing stop message, got: %s", fullLog)
+	}
+}
+
 func TestAgentPlanningPhase(t *testing.T) {
 	// Test that the agent works with report_plan tool (planning phase).
 	responses := []ChatResponse{
