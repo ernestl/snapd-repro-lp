@@ -6,7 +6,30 @@ Given a Launchpad bug number, the tool fetches the bug report, uses an LLM to
 plan a reproduction strategy, then executes it inside a disposable LXD
 container.
 
-## Setup
+## Development
+
+### Workshop (recommended)
+
+The project includes a [Workshop](https://github.com/canonical/workshop) definition
+that provides a reproducible development environment with Go and all required
+tools pre-installed:
+
+```bash
+# Launch the workshop container
+workshop launch
+
+# Build, test, and lint
+workshop run -- build
+workshop run -- test
+workshop run -- lint
+
+# Or open an interactive shell
+workshop shell
+```
+
+### Local setup
+
+Alternatively, set up the host directly:
 
 ```bash
 # Install Go and LXD (Ubuntu)
