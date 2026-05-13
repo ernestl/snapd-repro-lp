@@ -119,6 +119,7 @@ func writeSnapdKnowledge(b *strings.Builder) {
 - Snap interfaces: "snap interface <name>".
 - Common debug: "snap debug state /var/lib/snapd/state.json".
 - If a snap refresh is stuck, check "snap changes" and "snap change <id>" for the stuck change.
+- To simulate a narrow terminal (e.g., for output-formatting bugs), use COLUMNS=80 before the command. Do NOT use stty cols — it requires a TTY that lxc exec does not provide.
 
 `)
 }
@@ -165,6 +166,8 @@ func BuildPlanningPrompt(bug *Bug, skills *SkillIndex) string {
 - Do NOT include steps that upgrade snapd or other packages to versions containing the fix.
 - If the bug cannot be reproduced (requires specific hardware, closed-source components, etc.), still provide a best-effort plan and note the limitations in expected_result.
 - List all attachments you reviewed in the attachments_reviewed field.
+- Commands run via lxc exec without a pseudo-TTY. Avoid commands that require a TTY (e.g., stty, dialog, interactive prompts). To simulate terminal width, set COLUMNS (e.g., COLUMNS=80 snap list).
+- Some snaps cannot run inside unprivileged LXD containers (e.g., lxd, multipass). Prefer simpler snaps that work in any container.
 - NEVER ask the user for permission or confirmation. Always call report_plan directly when your plan is ready.
 
 `)
