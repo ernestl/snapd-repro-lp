@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -68,7 +69,7 @@ func writeBugReport(b *strings.Builder, bug *Bug) {
 		for _, att := range bug.Attachments {
 			fmt.Fprintf(b, "- **%s** (type: %s)", att.Title, att.Type)
 			if att.FilePath != "" {
-				fmt.Fprintf(b, " — file: %s", att.FilePath)
+				fmt.Fprintf(b, " — file: %s", filepath.Base(att.FilePath))
 			}
 			b.WriteString("\n")
 		}
@@ -123,10 +124,9 @@ func BuildPlanningPrompt(bug *Bug) string {
 
 ## Instructions
 1. Read the bug report carefully. Understand what the reporter observed and what conditions trigger the bug.
-2. If there are attachments (log files, configs, etc.), use the read_file tool to inspect them.
-3. Determine which Ubuntu version to use based on the bug tags, description, or comments. Use the codename mapping table below.
-4. Plan a step-by-step reproduction strategy using shell commands.
-5. Call report_plan with your structured plan.
+2. Determine which Ubuntu version to use based on the bug tags, description, or comments. Use the codename mapping table below.
+3. Plan a step-by-step reproduction strategy using shell commands.
+4. Call report_plan with your structured plan.
 
 ## Tools Available
 - **read_file**: Read an attachment file from the bug directory. Use this to inspect log files, config files, or any other attachments.
@@ -150,6 +150,8 @@ func BuildPlanningPrompt(bug *Bug) string {
 	// Tell the LLM how to access attachments.
 	if len(bug.Attachments) > 0 {
 		b.WriteString("\nUse the read_file tool to inspect any of the attachments listed above. Pass the filename (e.g., 'journal.log') as the path argument.\n")
+	} else {
+		b.WriteString("\nThere are no attachments to review in this bug report.\n")
 	}
 
 	return b.String()
@@ -158,12 +160,16 @@ func BuildPlanningPrompt(bug *Bug) string {
 // BuildPlanningUserMessage constructs the initial user message for the
 // planning phase.
 func BuildPlanningUserMessage(bug *Bug) string {
-	return fmt.Sprintf(
+	msg := fmt.Sprintf(
 		"Analyze Launchpad bug #%d: %s\n\n"+
-			"Review the bug report and any attachments, determine the correct Ubuntu version, "+
+			"Review the bug report, determine the correct Ubuntu version, "+
 			"and produce a step-by-step reproduction plan. Call report_plan when ready.",
 		bug.ID, bug.Title,
 	)
+	if len(bug.Attachments) > 0 {
+		msg += "\n\nUse read_file to inspect the bug's attachments."
+	}
+	return msg
 }
 
 // --- Execution prompt ---

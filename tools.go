@@ -243,6 +243,24 @@ func (t *ReadFileTool) Execute(_ context.Context, argsJSON string) (*ToolResult,
 		if os.IsNotExist(err) {
 			return &ToolResult{Output: fmt.Sprintf("error: file not found: %s", args.Path)}, nil
 		}
+		// If the path is a directory, list its contents.
+		if info, statErr := os.Stat(absPath); statErr == nil && info.IsDir() {
+			entries, readErr := os.ReadDir(absPath)
+			if readErr != nil {
+				return nil, fmt.Errorf("reading directory: %w", readErr)
+			}
+			var listing strings.Builder
+			fmt.Fprintf(&listing, "Contents of %s:\n", args.Path)
+			for _, e := range entries {
+				suffix := ""
+				if e.IsDir() {
+					suffix = "/"
+				}
+				fmt.Fprintf(&listing, "  %s%s\n", e.Name(), suffix)
+			}
+			fmt.Fprintf(&listing, "\n%d entries", len(entries))
+			return &ToolResult{Output: listing.String()}, nil
+		}
 		return nil, fmt.Errorf("reading file: %w", err)
 	}
 

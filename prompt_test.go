@@ -90,7 +90,7 @@ func TestBuildSystemPromptWithAttachments(t *testing.T) {
 			{
 				Title:    "journal.log",
 				Type:     "Patch",
-				FilePath: "/tmp/bug-55555/journal.log",
+				FilePath: "/tmp/bug-55555/attachments/journal.log",
 			},
 			{
 				Title: "screenshot.png",
@@ -104,8 +104,8 @@ func TestBuildSystemPromptWithAttachments(t *testing.T) {
 	if !strings.Contains(prompt, "journal.log") {
 		t.Error("missing attachment title")
 	}
-	if !strings.Contains(prompt, "/tmp/bug-55555/journal.log") {
-		t.Error("missing attachment file path")
+	if !strings.Contains(prompt, "file: journal.log") {
+		t.Error("should show base filename, not full path")
 	}
 	if !strings.Contains(prompt, "screenshot.png") {
 		t.Error("missing second attachment")
@@ -209,9 +209,12 @@ func TestBuildPlanningPromptNoAttachments(t *testing.T) {
 	if strings.Contains(prompt, "Use the read_file tool to inspect") {
 		t.Error("should not have read_file instruction when no attachments")
 	}
+	if !strings.Contains(prompt, "There are no attachments to review") {
+		t.Error("should explicitly state there are no attachments")
+	}
 }
 
-func TestBuildPlanningUserMessage(t *testing.T) {
+func TestBuildPlanningUserMessageNoAttachments(t *testing.T) {
 	bug := &Bug{
 		ID:    1662786,
 		Title: "snap list output hard to read",
@@ -227,6 +230,25 @@ func TestBuildPlanningUserMessage(t *testing.T) {
 	}
 	if !strings.Contains(msg, "report_plan") {
 		t.Error("missing report_plan instruction")
+	}
+	if strings.Contains(msg, "read_file") {
+		t.Error("should not mention read_file when no attachments")
+	}
+}
+
+func TestBuildPlanningUserMessageWithAttachments(t *testing.T) {
+	bug := &Bug{
+		ID:    1662786,
+		Title: "snap list output hard to read",
+		Attachments: []Attachment{
+			{Title: "journal.log", Type: "Patch", FilePath: "journal.log"},
+		},
+	}
+
+	msg := BuildPlanningUserMessage(bug)
+
+	if !strings.Contains(msg, "read_file") {
+		t.Error("should mention read_file when there are attachments")
 	}
 }
 

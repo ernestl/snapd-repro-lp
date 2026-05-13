@@ -73,12 +73,18 @@ func TestReproduceWritesJSON(t *testing.T) {
 
 	// Create bug subdirectory.
 	bugDir := filepath.Join(tmpDir, "bug-12345")
-	if err := os.MkdirAll(bugDir, 0755); err != nil {
+	attachmentsDir := filepath.Join(bugDir, "attachments")
+	if err := os.MkdirAll(attachmentsDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
 	// Download attachments.
-	if err := DownloadAttachments(b.Attachments, bugDir); err != nil {
+	if err := DownloadAttachments(b.Attachments, attachmentsDir); err != nil {
+		t.Fatalf("DownloadAttachments: %v", err)
+	}
+
+	// Download attachments.
+	if err := DownloadAttachments(b.Attachments, attachmentsDir); err != nil {
 		t.Fatalf("DownloadAttachments: %v", err)
 	}
 
