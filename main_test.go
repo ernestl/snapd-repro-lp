@@ -164,6 +164,7 @@ func TestModelFlagOverridesEnv(t *testing.T) {
 func TestModelDefault(t *testing.T) {
 	modelName = ""
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("OPENROUTER_MODEL", "")
 	_, _ = executeCommand("test", "chat", "hello")
 	if modelName != "anthropic/claude-sonnet-4" {
 		t.Errorf("model = %q, want %q", modelName, "anthropic/claude-sonnet-4")
