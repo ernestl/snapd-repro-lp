@@ -64,7 +64,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 	tools := a.executor.ToolDefinitions()
 	maxIter := a.config.MaxIterations
 	if maxIter <= 0 {
-		maxIter = 20
+		maxIter = 60
 	}
 
 	for i := 0; i < maxIter; i++ {
@@ -91,11 +91,16 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 		// Append the assistant message to the conversation.
 		messages = append(messages, choice.Message)
 
+		// Show LLM text content if present (may accompany tool calls).
+		if choice.Message.Content != nil && *choice.Message.Content != "" {
+			a.progressf("[%d/%d] LLM: %s", i+1, maxIter, truncate(*choice.Message.Content, 500))
+		}
+
 		// If the LLM returned tool calls, execute them.
 		if choice.FinishReason == "tool_calls" || len(choice.Message.ToolCalls) > 0 {
 			for _, tc := range choice.Message.ToolCalls {
 				a.progressf("[%d/%d] Tool: %s", i+1, maxIter, tc.Function.Name)
-				a.logf("  args: %s", truncate(tc.Function.Arguments, 200))
+				a.progressf("  args: %s", truncate(tc.Function.Arguments, 500))
 
 				result, err := a.executor.Execute(tc.Function.Name, tc.Function.Arguments)
 				if err != nil {
@@ -105,7 +110,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (*Age
 				// Append the tool result message.
 				messages = append(messages, ToolResultMessage(tc.ID, tc.Function.Name, result.Output))
 
-				a.logf("  result: %s", truncate(result.Output, 200))
+				a.progressf("  result: %s", truncate(result.Output, 500))
 
 				if result.StopAgent {
 					a.progressf("[%d/%d] Agent stopped by %s", i+1, maxIter, tc.Function.Name)

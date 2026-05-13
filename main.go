@@ -552,8 +552,8 @@ var testLxdDeleteCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
-	rootCmd.PersistentFlags().StringVar(&modelName, "model", "anthropic/claude-sonnet-4", "LLM model to use via OpenRouter")
-	rootCmd.PersistentFlags().IntVar(&maxIterations, "max-iter", 20, "maximum agent iterations")
+	rootCmd.PersistentFlags().StringVar(&modelName, "model", "deepseek/deepseek-chat", "LLM model to use via OpenRouter")
+	rootCmd.PersistentFlags().IntVar(&maxIterations, "max-iter", 60, "maximum agent iterations")
 
 	// plan command flags.
 	planCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "directory to write output (default: current directory)")
