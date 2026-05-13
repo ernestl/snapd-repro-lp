@@ -1,0 +1,47 @@
+name: snapd-repro-lp
+version: "0.1.0"
+summary: AI-assisted snapd bug reproduction from Launchpad
+description: |
+  snapd-repro-lp is a tool that automatically reproduces snapd bugs
+  from Launchpad. Given a bug number, it fetches the bug report,
+  uses an LLM to plan a reproduction strategy, then executes it
+  inside a disposable LXD container.
+
+  Requires an OpenRouter API key (OPENROUTER_API_KEY) and a working
+  LXD installation.
+
+base: core24
+confinement: strict
+grade: devel
+
+parts:
+  lxc-client:
+    plugin: nil
+    stage-snaps:
+      - lxd/latest/stable
+    stage:
+      - bin/lxc
+    prime:
+      - bin/lxc
+
+  snapd-repro-lp:
+    after: [lxc-client]
+    plugin: go
+    source: .
+    build-snaps:
+      - go/1.26/stable
+    override-build: |
+      craftctl default
+      mkdir -p $CRAFT_PART_INSTALL/bin
+      go build -o $CRAFT_PART_INSTALL/bin/snapd-repro-lp ./...
+
+apps:
+  snapd-repro-lp:
+    command: bin/snapd-repro-lp
+    plugs:
+      - network
+      - lxd
+      - home
+    environment:
+      LXD_SOCKET: /var/snap/lxd/common/lxd/unix.socket
+      LXD_DIR: /var/snap/lxd/common/lxd
