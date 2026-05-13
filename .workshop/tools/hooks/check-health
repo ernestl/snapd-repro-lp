@@ -1,0 +1,6 @@
+if ! golangci-lint --version; then
+  workshopctl set-health error "golangci-lint is not installed"
+  exit 1
+fi
+
+workshopctl set-health okay

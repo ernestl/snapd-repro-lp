@@ -1,0 +1,13 @@
+name: snapd-repro-lp
+base: ubuntu@24.04
+sdks:
+  - name: go
+    channel: latest/stable
+  - name: project-tools
+actions:
+  lint: |
+    golangci-lint run
+  test: |
+    GOTOOLCHAIN=auto go test ./...
+  build: |
+    GOTOOLCHAIN=auto go build -o snapd-repro-lp .
