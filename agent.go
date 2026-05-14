@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -237,7 +238,7 @@ func summariseRecentActivity(messages []ChatMessage) string {
 func (a *Agent) progressf(format string, args ...interface{}) {
 	line := fmt.Sprintf(a.prefix+format, args...)
 	_, _ = fmt.Fprintln(a.output, line)
-	fmt.Fprintln(&a.log, line)
+	fmt.Fprintln(&a.log, stripANSI(line))
 }
 
 // verbosef prints detail messages only when verbose mode is enabled,
@@ -247,7 +248,7 @@ func (a *Agent) verbosef(format string, args ...interface{}) {
 	if a.config.Verbose {
 		_, _ = fmt.Fprintln(a.output, line)
 	}
-	fmt.Fprintln(&a.log, line)
+	fmt.Fprintln(&a.log, stripANSI(line))
 }
 
 // logf prints debug messages only when verbose mode is enabled.
@@ -259,9 +260,19 @@ func (a *Agent) logf(format string, args ...interface{}) {
 
 // Log returns the full interaction log captured during Run(). This
 // includes all progress lines and verbose detail (tool requests and
-// outputs) regardless of the Verbose setting.
+// outputs) regardless of the Verbose setting. The log is plain text
+// with no ANSI escape sequences.
 func (a *Agent) Log() string {
 	return a.log.String()
+}
+
+// ansiPattern matches ANSI escape sequences (CSI sequences like
+// \033[31m, \033[0m, etc.).
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// stripANSI removes ANSI escape sequences from s.
+func stripANSI(s string) string {
+	return ansiPattern.ReplaceAllString(s, "")
 }
 
 // truncate returns s truncated to maxLen with "..." appended if needed.

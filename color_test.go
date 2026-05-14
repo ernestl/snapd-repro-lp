@@ -43,3 +43,25 @@ func TestColorEmptyString(t *testing.T) {
 		t.Errorf("bold empty: got %q", result)
 	}
 }
+
+func TestStripANSI(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"hello", "hello"},
+		{cyan("hello"), "hello"},
+		{bold(red("error")), "error"},
+		{dim("request: " + cyan("data")), "request: data"},
+		{boldCyan("Step 1/3:") + " text", "Step 1/3: text"},
+		{"", ""},
+		{"no colour here", "no colour here"},
+	}
+
+	for _, tt := range tests {
+		got := stripANSI(tt.input)
+		if got != tt.want {
+			t.Errorf("stripANSI(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

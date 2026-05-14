@@ -450,6 +450,11 @@ func TestAgentLogCapturesVerboseWhenOff(t *testing.T) {
 	if !strings.Contains(fullLog, "LLM reported result") {
 		t.Errorf("agent.Log() missing stop message, got: %s", fullLog)
 	}
+
+	// Log must be plain text — no ANSI escape sequences.
+	if strings.Contains(fullLog, "\033") {
+		t.Errorf("agent.Log() contains ANSI escape sequences; log must be plain text")
+	}
 }
 
 func TestAgentPlanningPhase(t *testing.T) {
