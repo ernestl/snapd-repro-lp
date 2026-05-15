@@ -27,14 +27,26 @@ var skillsJSON []byte
 //go:embed skills/*
 var skillsFS embed.FS
 
+//go:embed snapd_revision_version_map.txt
+var revisionMapData string
+
 // skillIndex is the parsed skill index, initialized at startup.
 var skillIndex *SkillIndex
+
+// revisionMap is the parsed snapd revision-version mapping,
+// initialized at startup.
+var revisionMap []SnapdRevision
 
 func init() {
 	var err error
 	skillIndex, err = NewSkillIndex(skillsJSON, skillsFS)
 	if err != nil {
 		panic(fmt.Sprintf("failed to load embedded skills: %v", err))
+	}
+
+	revisionMap, err = parseRevisionMap(revisionMapData)
+	if err != nil {
+		panic(fmt.Sprintf("failed to parse embedded revision map: %v", err))
 	}
 }
 
@@ -185,7 +197,8 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 	reportPlan := NewReportPlanTool()
 	describeSkill := NewDescribeSkillTool(skillIndex)
 	loadSkill := NewLoadSkillTool(skillIndex)
-	tools := []Tool{runCmd, reportPlan, describeSkill, loadSkill}
+	queryRevisions := NewQueryRevisionsTool(revisionMap)
+	tools := []Tool{runCmd, reportPlan, describeSkill, loadSkill, queryRevisions}
 	if readFile != nil {
 		tools = append(tools, readFile)
 	}
@@ -248,7 +261,8 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 	reportResult := NewReportResultTool()
 	describeSkill := NewDescribeSkillTool(skillIndex)
 	loadSkill := NewLoadSkillTool(skillIndex)
-	executor := NewToolExecutor(runCmd, reportResult, describeSkill, loadSkill)
+	queryRevisions := NewQueryRevisionsTool(revisionMap)
+	executor := NewToolExecutor(runCmd, reportResult, describeSkill, loadSkill, queryRevisions)
 
 	// Build LLM client and agent.
 	llmClient := NewLLMClient(apiKey, modelName)

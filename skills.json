@@ -47,6 +47,12 @@
       "keywords": ["container", "lxd", "lxc", "vm", "virtual-machine", "nested", "instance", "launch"],
       "summary": "Launching and managing LXD instances (VMs, containers, and nested containers) for bug reproduction.",
       "content_file": "skills/lxd.md"
+    },
+    {
+      "name": "snapd-code-tracing",
+      "keywords": ["error", "source", "code", "grep", "message", "cannot", "build", "debug", "SNAPD_DEBUG"],
+      "summary": "Techniques for tracing through the snapd Go source code to find code paths relevant to a bug, including intelligent error message searching (static vs dynamic parts), building and instrumenting snapd locally, and enabling debug/HTTP logging.",
+      "content_file": "skills/snapd-code-tracing.md"
     }
   ]
 }

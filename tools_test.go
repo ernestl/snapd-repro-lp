@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mockInstance implements InstanceManager for testing tools.
@@ -506,6 +507,315 @@ func TestReportPlanDefinition(t *testing.T) {
 	}
 	if def.Function.Name != "report_plan" {
 		t.Errorf("Function.Name = %q, want %q", def.Function.Name, "report_plan")
+	}
+}
+
+// --- parseRevisionMap tests ---
+
+const testRevisionData = `REVISION  VERSION                     ARCH     STATUS                 CREATED
+--------  --------------------------  -------  ---------------------  ----------
+100       2.63.1                      amd64    Published              2024-03-15
+99        2.63.1                      arm64    Published              2024-03-15
+98        2.63                        amd64    Published              2024-03-10
+97        2.63                        arm64    Published              2024-03-10
+96        2.62.1                      amd64    Published              2024-02-20
+95        2.62.1                      armhf    Published              2024-02-20
+94        2.62                        amd64    AutomaticallyRejected  2024-02-15
+
+Total: 7 revisions
+`
+
+func TestParseRevisionMap(t *testing.T) {
+	revs, err := parseRevisionMap(testRevisionData)
+	if err != nil {
+		t.Fatalf("parseRevisionMap failed: %v", err)
+	}
+	if len(revs) != 7 {
+		t.Fatalf("expected 7 revisions, got %d", len(revs))
+	}
+
+	// Check first entry.
+	r := revs[0]
+	if r.Revision != 100 {
+		t.Errorf("Revision = %d, want 100", r.Revision)
+	}
+	if r.Version != "2.63.1" {
+		t.Errorf("Version = %q, want %q", r.Version, "2.63.1")
+	}
+	if r.Arch != "amd64" {
+		t.Errorf("Arch = %q, want %q", r.Arch, "amd64")
+	}
+	if r.Status != "Published" {
+		t.Errorf("Status = %q, want %q", r.Status, "Published")
+	}
+	expected := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
+	if !r.Created.Equal(expected) {
+		t.Errorf("Created = %v, want %v", r.Created, expected)
+	}
+
+	// Check AutomaticallyRejected status is parsed correctly.
+	r = revs[6]
+	if r.Revision != 94 {
+		t.Errorf("Revision = %d, want 94", r.Revision)
+	}
+	if r.Status != "AutomaticallyRejected" {
+		t.Errorf("Status = %q, want %q", r.Status, "AutomaticallyRejected")
+	}
+}
+
+func TestParseRevisionMapEmpty(t *testing.T) {
+	_, err := parseRevisionMap("")
+	if err == nil {
+		t.Fatal("expected error for empty input")
+	}
+	if !strings.Contains(err.Error(), "no revisions parsed") {
+		t.Errorf("error = %q, want 'no revisions parsed'", err.Error())
+	}
+}
+
+func TestParseRevisionMapHeaderOnly(t *testing.T) {
+	data := "REVISION  VERSION  ARCH  STATUS  CREATED\n--------  -------  ----  ------  -------\n"
+	_, err := parseRevisionMap(data)
+	if err == nil {
+		t.Fatal("expected error for header-only input")
+	}
+}
+
+func TestParseRevisionMapSkipsMalformed(t *testing.T) {
+	data := `REVISION  VERSION  ARCH  STATUS  CREATED
+--------  -------  ----  ------  -------
+100       2.63.1   amd64 Published 2024-03-15
+bad line
+99        2.63     amd64 Published 2024-03-10
+`
+	revs, err := parseRevisionMap(data)
+	if err != nil {
+		t.Fatalf("parseRevisionMap failed: %v", err)
+	}
+	if len(revs) != 2 {
+		t.Errorf("expected 2 revisions (skipping malformed), got %d", len(revs))
+	}
+}
+
+// --- QueryRevisionsTool tests ---
+
+func testRevisions() []SnapdRevision {
+	revs, _ := parseRevisionMap(testRevisionData)
+	return revs
+}
+
+func TestQueryRevisionsToolDefinition(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	if tool.Name() != "query_snapd_revisions" {
+		t.Errorf("Name = %q, want %q", tool.Name(), "query_snapd_revisions")
+	}
+
+	def := tool.Definition()
+	if def.Type != "function" {
+		t.Errorf("Type = %q, want %q", def.Type, "function")
+	}
+	if def.Function.Name != "query_snapd_revisions" {
+		t.Errorf("Function.Name = %q, want %q", def.Function.Name, "query_snapd_revisions")
+	}
+}
+
+func TestQueryRevisionsToolByRevision(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	result, err := tool.Execute(context.Background(), `{"revision": 100}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.StopAgent {
+		t.Error("StopAgent should be false")
+	}
+	if !strings.Contains(result.Output, "2.63.1") {
+		t.Errorf("output should contain version 2.63.1, got %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "amd64") {
+		t.Errorf("output should contain arch amd64, got %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "1 results") {
+		t.Errorf("should find exactly 1 result, got %q", result.Summary)
+	}
+}
+
+func TestQueryRevisionsToolByVersion(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	result, err := tool.Execute(context.Background(), `{"version": "2.63"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// "2.63" prefix matches 2.63 and 2.63.1 — 4 entries total.
+	if !strings.Contains(result.Output, "4 results") {
+		t.Errorf("expected 4 results for version prefix '2.63', got output: %q", result.Output)
+	}
+}
+
+func TestQueryRevisionsToolByVersionExact(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	// "2.62.1" should match only 2.62.1 entries, not 2.62.
+	result, err := tool.Execute(context.Background(), `{"version": "2.62.1"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "2 results") {
+		t.Errorf("expected 2 results for version '2.62.1', got output: %q", result.Output)
+	}
+}
+
+func TestQueryRevisionsToolByArch(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	result, err := tool.Execute(context.Background(), `{"architecture": "arm64"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "2 results") {
+		t.Errorf("expected 2 arm64 results, got output: %q", result.Output)
+	}
+	// Should not contain amd64 entries.
+	lines := strings.Split(result.Output, "\n")
+	for _, line := range lines[2:] { // skip header
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "\n") || strings.Contains(line, "results") {
+			continue
+		}
+		if strings.Contains(line, "amd64") {
+			t.Errorf("arm64 filter should not include amd64 entries: %q", line)
+		}
+	}
+}
+
+func TestQueryRevisionsToolByDateRange(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	result, err := tool.Execute(context.Background(), `{"since": "2024-03-01", "until": "2024-03-11"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should match 2024-03-10 entries (rev 97, 98) but not 2024-03-15 or 2024-02-*.
+	if !strings.Contains(result.Output, "98") {
+		t.Errorf("should include revision 98, got: %q", result.Output)
+	}
+	if strings.Contains(result.Output, "100") {
+		t.Errorf("should not include revision 100 (2024-03-15), got: %q", result.Output)
+	}
+	if strings.Contains(result.Output, "96") {
+		t.Errorf("should not include revision 96 (2024-02-20), got: %q", result.Output)
+	}
+}
+
+func TestQueryRevisionsToolCombinedFilters(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	// Filter: version=2.63, arch=amd64 → should match rev 98 and 100.
+	result, err := tool.Execute(context.Background(), `{"version": "2.63", "architecture": "amd64"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "2 results") {
+		t.Errorf("expected 2 results for version=2.63 + arch=amd64, got: %q", result.Output)
+	}
+}
+
+func TestQueryRevisionsToolNoFilters(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	result, err := tool.Execute(context.Background(), `{}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "error: at least one filter") {
+		t.Errorf("expected error for no filters, got: %q", result.Output)
+	}
+}
+
+func TestQueryRevisionsToolInvalidJSON(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	_, err := tool.Execute(context.Background(), `not json`)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestQueryRevisionsToolInvalidSinceDate(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	result, err := tool.Execute(context.Background(), `{"since": "not-a-date"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "error: invalid 'since' date") {
+		t.Errorf("expected date format error, got: %q", result.Output)
+	}
+}
+
+func TestQueryRevisionsToolInvalidUntilDate(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	result, err := tool.Execute(context.Background(), `{"until": "2024/03/15"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "error: invalid 'until' date") {
+		t.Errorf("expected date format error, got: %q", result.Output)
+	}
+}
+
+func TestQueryRevisionsToolNoResults(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	result, err := tool.Execute(context.Background(), `{"version": "9.99"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "No revisions found") {
+		t.Errorf("expected 'No revisions found', got: %q", result.Output)
+	}
+	if result.Summary != "0 results" {
+		t.Errorf("Summary = %q, want %q", result.Summary, "0 results")
+	}
+}
+
+func TestQueryRevisionsToolRevisionNotFound(t *testing.T) {
+	tool := NewQueryRevisionsTool(testRevisions())
+
+	result, err := tool.Execute(context.Background(), `{"revision": 99999}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "No revisions found") {
+		t.Errorf("expected 'No revisions found', got: %q", result.Output)
+	}
+}
+
+func TestQueryRevisionsToolTruncation(t *testing.T) {
+	// Create more than maxRevisionResults entries.
+	var revs []SnapdRevision
+	for i := 0; i < maxRevisionResults+50; i++ {
+		revs = append(revs, SnapdRevision{
+			Revision: 10000 + i,
+			Version:  "2.70",
+			Arch:     "amd64",
+			Status:   "Published",
+			Created:  time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		})
+	}
+
+	tool := NewQueryRevisionsTool(revs)
+	result, err := tool.Execute(context.Background(), `{"version": "2.70"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "narrow your filters") {
+		t.Errorf("expected truncation notice, got: %q", result.Output)
+	}
+	if !strings.Contains(result.Summary, "truncated") {
+		t.Errorf("Summary should indicate truncation, got: %q", result.Summary)
 	}
 }
 

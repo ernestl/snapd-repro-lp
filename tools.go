@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // ToolResult holds the output from executing a tool.
@@ -505,4 +508,231 @@ func (e *ToolExecutor) Execute(ctx context.Context, name, argsJSON string) (*Too
 		}, nil
 	}
 	return tool.Execute(ctx, argsJSON)
+}
+
+// --- query_snapd_revisions tool ---
+
+// SnapdRevision represents a single entry from the snapd snap store
+// revision-version mapping.
+type SnapdRevision struct {
+	Revision int
+	Version  string
+	Arch     string
+	Status   string
+	Created  time.Time
+}
+
+// parseRevisionMap parses the tabular revision-version mapping text
+// into a slice of SnapdRevision entries. The input format has a
+// 2-line header (column names + separator), data rows, and an
+// optional trailing "Total:" line. Each data row is whitespace-
+// separated: REVISION VERSION ARCH STATUS CREATED(YYYY-MM-DD).
+func parseRevisionMap(data string) ([]SnapdRevision, error) {
+	var revisions []SnapdRevision
+
+	scanner := bufio.NewScanner(strings.NewReader(data))
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip the 2-line header.
+		if lineNum <= 2 {
+			continue
+		}
+
+		// Skip empty lines and the trailing "Total:" summary.
+		if line == "" || strings.HasPrefix(line, "Total:") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue // malformed line, skip
+		}
+
+		rev, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue // not a data row
+		}
+
+		created, err := time.Parse("2006-01-02", fields[len(fields)-1])
+		if err != nil {
+			continue // unparseable date
+		}
+
+		// Status may be a single word at fields[3] (e.g. "Published")
+		// and date at fields[4]. But some versions have spaces in
+		// status like "AutomaticallyRejected". The version is always
+		// fields[1], arch is fields[2], date is the last field, and
+		// status is everything between arch and date.
+		version := fields[1]
+		arch := fields[2]
+		status := strings.Join(fields[3:len(fields)-1], "")
+
+		revisions = append(revisions, SnapdRevision{
+			Revision: rev,
+			Version:  version,
+			Arch:     arch,
+			Status:   status,
+			Created:  created,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scanning revision map: %w", err)
+	}
+
+	if len(revisions) == 0 {
+		return nil, fmt.Errorf("no revisions parsed from input")
+	}
+
+	return revisions, nil
+}
+
+// QueryRevisionsTool lets the LLM query the snapd snap revision-to-
+// version mapping by date range, architecture, revision number, or
+// version string.
+type QueryRevisionsTool struct {
+	revisions []SnapdRevision
+}
+
+// NewQueryRevisionsTool creates a new query_snapd_revisions tool
+// backed by the given parsed revision data.
+func NewQueryRevisionsTool(revisions []SnapdRevision) *QueryRevisionsTool {
+	return &QueryRevisionsTool{revisions: revisions}
+}
+
+func (t *QueryRevisionsTool) Name() string { return "query_snapd_revisions" }
+
+func (t *QueryRevisionsTool) Definition() ToolDef {
+	return ToolDef{
+		Type: "function",
+		Function: ToolSchema{
+			Name:        "query_snapd_revisions",
+			Description: "Query the snapd snap store revision-to-version mapping. Use this to look up which snapd version corresponds to a revision number mentioned in a bug report, or to find revisions for a specific version or time range. At least one filter parameter must be provided.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"revision": map[string]interface{}{
+						"type":        "integer",
+						"description": "Look up a specific snap store revision number.",
+					},
+					"version": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by version string (prefix match, e.g. '2.63' matches '2.63', '2.63.1', '2.63+git...').",
+					},
+					"architecture": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by architecture (e.g. 'amd64', 'arm64', 'armhf', 'ppc64el', 's390x', 'riscv64').",
+					},
+					"since": map[string]interface{}{
+						"type":        "string",
+						"description": "Start date filter in YYYY-MM-DD format (inclusive).",
+					},
+					"until": map[string]interface{}{
+						"type":        "string",
+						"description": "End date filter in YYYY-MM-DD format (inclusive).",
+					},
+				},
+				"additionalProperties": false,
+			},
+		},
+	}
+}
+
+type queryRevisionsArgs struct {
+	Revision     *int   `json:"revision,omitempty"`
+	Version      string `json:"version,omitempty"`
+	Architecture string `json:"architecture,omitempty"`
+	Since        string `json:"since,omitempty"`
+	Until        string `json:"until,omitempty"`
+}
+
+const maxRevisionResults = 200
+
+func (t *QueryRevisionsTool) Execute(_ context.Context, argsJSON string) (*ToolResult, error) {
+	var args queryRevisionsArgs
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return nil, fmt.Errorf("parsing query_snapd_revisions args: %w", err)
+	}
+
+	// Require at least one filter.
+	if args.Revision == nil && args.Version == "" && args.Architecture == "" && args.Since == "" && args.Until == "" {
+		return &ToolResult{Output: "error: at least one filter parameter is required (revision, version, architecture, since, or until)"}, nil
+	}
+
+	// Parse date filters.
+	var sinceTime, untilTime time.Time
+	var err error
+	if args.Since != "" {
+		sinceTime, err = time.Parse("2006-01-02", args.Since)
+		if err != nil {
+			return &ToolResult{Output: fmt.Sprintf("error: invalid 'since' date format (use YYYY-MM-DD): %v", err)}, nil
+		}
+	}
+	if args.Until != "" {
+		untilTime, err = time.Parse("2006-01-02", args.Until)
+		if err != nil {
+			return &ToolResult{Output: fmt.Sprintf("error: invalid 'until' date format (use YYYY-MM-DD): %v", err)}, nil
+		}
+	}
+
+	// Filter revisions.
+	var matches []SnapdRevision
+	for i := range t.revisions {
+		r := &t.revisions[i]
+
+		if args.Revision != nil && r.Revision != *args.Revision {
+			continue
+		}
+		if args.Version != "" && !strings.HasPrefix(r.Version, args.Version) {
+			continue
+		}
+		if args.Architecture != "" && r.Arch != args.Architecture {
+			continue
+		}
+		if !sinceTime.IsZero() && r.Created.Before(sinceTime) {
+			continue
+		}
+		if !untilTime.IsZero() && r.Created.After(untilTime) {
+			continue
+		}
+
+		matches = append(matches, *r)
+		if len(matches) > maxRevisionResults {
+			break
+		}
+	}
+
+	if len(matches) == 0 {
+		return &ToolResult{Output: "No revisions found matching the given filters.", Summary: "0 results"}, nil
+	}
+
+	// Format output.
+	var b strings.Builder
+	truncated := false
+	if len(matches) > maxRevisionResults {
+		matches = matches[:maxRevisionResults]
+		truncated = true
+	}
+
+	fmt.Fprintf(&b, "REVISION  VERSION                     ARCH     STATUS                 CREATED\n")
+	fmt.Fprintf(&b, "--------  --------------------------  -------  ---------------------  ----------\n")
+	for _, r := range matches {
+		fmt.Fprintf(&b, "%-9d %-27s %-8s %-22s %s\n",
+			r.Revision, r.Version, r.Arch, r.Status, r.Created.Format("2006-01-02"))
+	}
+
+	if truncated {
+		fmt.Fprintf(&b, "\n...[showing first %d results, narrow your filters for more specific results]", maxRevisionResults)
+	} else {
+		fmt.Fprintf(&b, "\n%d results", len(matches))
+	}
+
+	summary := fmt.Sprintf("%d results", len(matches))
+	if truncated {
+		summary = fmt.Sprintf("%d+ results (truncated)", maxRevisionResults)
+	}
+
+	return &ToolResult{Output: b.String(), Summary: summary}, nil
 }
