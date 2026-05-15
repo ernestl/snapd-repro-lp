@@ -13,15 +13,24 @@ import (
 
 // mockInstance implements InstanceManager for testing tools.
 type mockInstance struct {
-	name     string
-	execFunc func(command string) (*ExecResult, error)
-	launched bool
-	deleted  bool
+	name            string
+	execFunc        func(command string) (*ExecResult, error)
+	launchCachedFn  func(image, instanceType string) (CacheStatus, error)
+	launched        bool
+	deleted         bool
 }
 
 func (m *mockInstance) Launch(image string, instanceType string) error {
 	m.launched = true
 	return nil
+}
+
+func (m *mockInstance) LaunchCached(image string, instanceType string) (CacheStatus, error) {
+	if m.launchCachedFn != nil {
+		return m.launchCachedFn(image, instanceType)
+	}
+	m.launched = true
+	return CacheHit, nil
 }
 
 func (m *mockInstance) Exec(_ context.Context, command string) (*ExecResult, error) {
@@ -814,8 +823,8 @@ func TestRunCommandToolFromRefSwap(t *testing.T) {
 
 func TestRelaunchVMToolDefinition(t *testing.T) {
 	ref := &InstanceRef{Instance: &mockInstance{name: "test-vm"}}
-	tool := NewRelaunchVMTool(ref, func() *LXDManager {
-		return NewLXDManager()
+	tool := NewRelaunchVMTool(ref, func() InstanceManager {
+		return &mockInstance{name: "new-vm"}
 	}, os.Stderr)
 
 	if tool.Name() != "relaunch_vm" {
@@ -835,27 +844,12 @@ func TestRelaunchVMToolSuccess(t *testing.T) {
 	oldInstance := &mockInstance{name: "old-vm"}
 	ref := &InstanceRef{Instance: oldInstance}
 
-	// Track which instance was created by the factory.
-	var newInstance *mockInstance
-	factory := func() *LXDManager {
-		// We can't use a real LXDManager in tests, so we'll test via
-		// the mock approach. But the factory returns *LXDManager, so
-		// let's test the error path and the interface.
-		// For a proper test of the success path, we need to verify the
-		// old instance is deleted and the ref is updated.
-		// Since the factory returns a *LXDManager which needs real lxc,
-		// we'll test the tool at a higher level by verifying the
-		// delete call and the error message when launch fails.
-		_ = newInstance
-		return NewLXDManager()
-	}
+	newInstance := &mockInstance{name: "new-vm"}
+	factory := func() InstanceManager { return newInstance }
 
 	var output bytes.Buffer
 	tool := NewRelaunchVMTool(ref, factory, &output)
 
-	// The factory creates a real LXDManager which will fail to launch
-	// since lxc isn't available in tests. But the old instance should
-	// be deleted first.
 	result, err := tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -866,26 +860,32 @@ func TestRelaunchVMToolSuccess(t *testing.T) {
 		t.Error("old instance should have been deleted")
 	}
 
-	// Since we can't run real lxc in tests, the launch will fail.
-	// The tool should return an error message (not a Go error).
-	if !strings.Contains(result.Output, "error: failed to launch new VM") {
-		// If it somehow succeeded (unlikely), check for success message.
-		if !strings.Contains(result.Output, "VM relaunched successfully") {
-			t.Errorf("unexpected output: %q", result.Output)
-		}
+	// New instance should be launched via LaunchCached.
+	if !newInstance.launched {
+		t.Error("new instance should have been launched")
+	}
+
+	// Ref should point to the new instance.
+	if ref.Instance.Name() != "new-vm" {
+		t.Errorf("ref.Instance.Name() = %q, want %q", ref.Instance.Name(), "new-vm")
+	}
+
+	if !strings.Contains(result.Output, "VM relaunched successfully") {
+		t.Errorf("unexpected output: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "new-vm") {
+		t.Errorf("output should contain new instance name, got: %q", result.Output)
 	}
 }
-
-// mockLXDFactory creates a factory that returns mock-backed instances
-// for testing. Since RelaunchVMTool.factory returns *LXDManager, we
-// can't easily inject a mock. Instead we test the pieces individually.
 
 func TestRelaunchVMToolDeletesOld(t *testing.T) {
 	oldInstance := &mockInstance{name: "old-vm"}
 	ref := &InstanceRef{Instance: oldInstance}
 
+	factory := func() InstanceManager { return &mockInstance{name: "new-vm"} }
+
 	var output bytes.Buffer
-	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+	tool := NewRelaunchVMTool(ref, factory, &output)
 
 	_, _ = tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
 
@@ -897,8 +897,10 @@ func TestRelaunchVMToolDeletesOld(t *testing.T) {
 func TestRelaunchVMToolEmptyVersion(t *testing.T) {
 	ref := &InstanceRef{Instance: &mockInstance{name: "test-vm"}}
 
+	factory := func() InstanceManager { return &mockInstance{name: "new-vm"} }
+
 	var output bytes.Buffer
-	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+	tool := NewRelaunchVMTool(ref, factory, &output)
 
 	result, err := tool.Execute(context.Background(), `{"ubuntu_version": ""}`)
 	if err != nil {
@@ -912,8 +914,10 @@ func TestRelaunchVMToolEmptyVersion(t *testing.T) {
 func TestRelaunchVMToolInvalidJSON(t *testing.T) {
 	ref := &InstanceRef{Instance: &mockInstance{name: "test-vm"}}
 
+	factory := func() InstanceManager { return &mockInstance{name: "new-vm"} }
+
 	var output bytes.Buffer
-	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+	tool := NewRelaunchVMTool(ref, factory, &output)
 
 	_, err := tool.Execute(context.Background(), `not json`)
 	if err == nil {
@@ -922,13 +926,13 @@ func TestRelaunchVMToolInvalidJSON(t *testing.T) {
 }
 
 func TestRelaunchVMToolDeleteFails(t *testing.T) {
-	oldInstance := &mockInstance{name: "old-vm"}
-	// Override Delete to return an error by using a custom instance.
 	failDeleteInstance := &failDeleteMock{name: "old-vm"}
 	ref := &InstanceRef{Instance: failDeleteInstance}
 
+	factory := func() InstanceManager { return &mockInstance{name: "new-vm"} }
+
 	var output bytes.Buffer
-	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+	tool := NewRelaunchVMTool(ref, factory, &output)
 
 	result, err := tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
 	if err != nil {
@@ -938,12 +942,84 @@ func TestRelaunchVMToolDeleteFails(t *testing.T) {
 		t.Errorf("Output = %q, want delete failure error", result.Output)
 	}
 
-	// Ref should still point to the old instance.
+	// Ref should still point to the old instance (delete failed, so we
+	// never reached the factory call).
 	if ref.Instance.Name() != "old-vm" {
 		t.Errorf("ref should still point to old instance, got %q", ref.Instance.Name())
 	}
+}
 
-	_ = oldInstance // suppress lint
+// TestRelaunchVMToolRefUpdatedOnLaunchFailure verifies that ref.Instance
+// is updated to the new manager even when LaunchCached fails.  Without
+// this, a failed launch leaves ref pointing at the deleted old VM, and
+// subsequent relaunch_vm calls keep deleting the same (already-gone)
+// instance in an infinite loop.
+func TestRelaunchVMToolRefUpdatedOnLaunchFailure(t *testing.T) {
+	oldInstance := &mockInstance{name: "old-vm"}
+	ref := &InstanceRef{Instance: oldInstance}
+
+	newInstance := &mockInstance{
+		name: "new-vm",
+		launchCachedFn: func(image, instanceType string) (CacheStatus, error) {
+			return 0, fmt.Errorf("lxc launch failed: network unreachable")
+		},
+	}
+	factory := func() InstanceManager { return newInstance }
+
+	var output bytes.Buffer
+	tool := NewRelaunchVMTool(ref, factory, &output)
+
+	result, err := tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Launch should fail.
+	if !strings.Contains(result.Output, "error: failed to launch new VM") {
+		t.Fatalf("expected launch failure, got: %q", result.Output)
+	}
+
+	// Critical: ref must point to the NEW manager, not the old one.
+	if ref.Instance.Name() != "new-vm" {
+		t.Errorf("ref.Instance should be new-vm, got %q", ref.Instance.Name())
+	}
+}
+
+func TestRelaunchVMToolCacheStatusMessages(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     CacheStatus
+		wantSubstr string
+	}{
+		{"hit", CacheHit, "from cached snapshot"},
+		{"miss", CacheMiss, "created cache for ubuntu:22.04"},
+		{"fallback", CacheFallback, "fresh launch, cache unavailable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old := &mockInstance{name: "old-vm"}
+			ref := &InstanceRef{Instance: old}
+
+			newInst := &mockInstance{
+				name: "new-vm",
+				launchCachedFn: func(image, instanceType string) (CacheStatus, error) {
+					return tt.status, nil
+				},
+			}
+			factory := func() InstanceManager { return newInst }
+
+			var output bytes.Buffer
+			tool := NewRelaunchVMTool(ref, factory, &output)
+
+			_, err := tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.Contains(output.String(), tt.wantSubstr) {
+				t.Errorf("output = %q, want to contain %q", output.String(), tt.wantSubstr)
+			}
+		})
+	}
 }
 
 // failDeleteMock is a mock that fails on Delete.
@@ -952,6 +1028,9 @@ type failDeleteMock struct {
 }
 
 func (m *failDeleteMock) Launch(image string, instanceType string) error { return nil }
+func (m *failDeleteMock) LaunchCached(image string, instanceType string) (CacheStatus, error) {
+	return CacheHit, nil
+}
 func (m *failDeleteMock) Exec(_ context.Context, command string) (*ExecResult, error) {
 	return &ExecResult{Output: "ok\n", ExitCode: 0}, nil
 }
@@ -962,14 +1041,15 @@ func TestRelaunchVMToolOnCleanupCallback(t *testing.T) {
 	oldInstance := &mockInstance{name: "old-vm"}
 	ref := &InstanceRef{Instance: oldInstance}
 
+	factory := func() InstanceManager { return &mockInstance{name: "new-vm"} }
+
 	var cleanedUp InstanceManager
 	var output bytes.Buffer
-	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+	tool := NewRelaunchVMTool(ref, factory, &output)
 	tool.onCleanup = func(old InstanceManager) {
 		cleanedUp = old
 	}
 
-	// Will fail on launch (no real lxc), but should still call cleanup.
 	_, _ = tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
 
 	if cleanedUp == nil {

@@ -377,9 +377,9 @@ type InstanceRef struct {
 
 // --- relaunch_vm tool ---
 
-// VMFactory creates a new LXD manager. The caller is responsible for
+// VMFactory creates a new instance manager. The caller is responsible for
 // launching and eventually deleting the returned instance.
-type VMFactory func() *LXDManager
+type VMFactory func() InstanceManager
 
 // RelaunchVMTool allows the LLM to relaunch the VM with a different
 // Ubuntu version mid-conversation. It deletes the current instance,
@@ -448,15 +448,25 @@ func (t *RelaunchVMTool) Execute(ctx context.Context, argsJSON string) (*ToolRes
 		t.onCleanup(old)
 	}
 
-	// Launch a new instance.
+	// Launch a new instance.  Update the shared reference immediately so
+	// that a failed launch does not leave ref pointing at the deleted VM
+	// (which would cause an infinite delete-retry loop on the same name).
 	newManager := t.factory()
+	t.ref.Instance = newManager
 	_, _ = fmt.Fprintf(t.output, "  Launching VM %s (ubuntu:%s)...\n", newManager.Name(), args.UbuntuVersion)
-	if err := newManager.LaunchCached(args.UbuntuVersion, "vm"); err != nil {
+	status, err := newManager.LaunchCached(args.UbuntuVersion, "vm")
+	if err != nil {
 		return &ToolResult{Output: fmt.Sprintf("error: failed to launch new VM: %v", err)}, nil
 	}
 
-	// Update the shared reference.
-	t.ref.Instance = newManager
+	switch status {
+	case CacheHit:
+		_, _ = fmt.Fprintf(t.output, "  (from cached snapshot)\n")
+	case CacheMiss:
+		_, _ = fmt.Fprintf(t.output, "  (created cache for ubuntu:%s)\n", args.UbuntuVersion)
+	case CacheFallback:
+		_, _ = fmt.Fprintf(t.output, "  (fresh launch, cache unavailable)\n")
+	}
 
 	summary := fmt.Sprintf("ubuntu:%s → %s", args.UbuntuVersion, newManager.Name())
 	output := fmt.Sprintf("VM relaunched successfully.\nNew instance: %s\nUbuntu version: %s\nAll previous VM state has been reset.", newManager.Name(), args.UbuntuVersion)

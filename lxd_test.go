@@ -614,8 +614,12 @@ func TestLaunchCachedHit(t *testing.T) {
 		name:        "snapd-repro-abc123",
 		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=success", "LXC_GOLDEN_NAMES=snapd-repro-base-2404"),
 	}
-	if err := m.LaunchCached("24.04", "vm"); err != nil {
+	status, err := m.LaunchCached("24.04", "vm")
+	if err != nil {
 		t.Fatalf("LaunchCached (cache hit) failed: %v", err)
+	}
+	if status != CacheHit {
+		t.Errorf("status = %d, want CacheHit (%d)", status, CacheHit)
 	}
 	if !m.running {
 		t.Error("expected running = true after LaunchCached")
@@ -628,8 +632,12 @@ func TestLaunchCachedMiss(t *testing.T) {
 		name:        "snapd-repro-abc123",
 		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=success", "LXC_GOLDEN_NAMES="),
 	}
-	if err := m.LaunchCached("24.04", "vm"); err != nil {
+	status, err := m.LaunchCached("24.04", "vm")
+	if err != nil {
 		t.Fatalf("LaunchCached (cache miss) failed: %v", err)
+	}
+	if status != CacheMiss {
+		t.Errorf("status = %d, want CacheMiss (%d)", status, CacheMiss)
 	}
 	if !m.running {
 		t.Error("expected running = true after LaunchCached")
@@ -645,12 +653,15 @@ func TestLaunchCachedCopyFails(t *testing.T) {
 	// copy_fail makes lxc copy fail, but lxc launch (fallback) also
 	// needs to succeed. The helper only fails on "launch_fail" for
 	// the launch subcommand, so this works.
-	err := m.LaunchCached("24.04", "vm")
+	status, err := m.LaunchCached("24.04", "vm")
 	// The fallback Launch() will also fail because waitForNetwork
 	// calls lxc list -c 4 which succeeds, so it should work.
 	// However, the copy_fail behavior doesn't affect launch or list.
 	if err != nil {
 		t.Fatalf("LaunchCached (copy fails, fallback) failed: %v", err)
+	}
+	if status != CacheFallback {
+		t.Errorf("status = %d, want CacheFallback (%d)", status, CacheFallback)
 	}
 	if !m.running {
 		t.Error("expected running = true after LaunchCached fallback")
@@ -667,11 +678,14 @@ func TestLaunchCachedListFails(t *testing.T) {
 	// lxc list -c 4 which also fails. We need different behavior...
 	// Actually, list_fail affects the -c n path only. The -c 4 path
 	// falls through to the normal IP listing. Let's verify.
-	err := m.LaunchCached("24.04", "vm")
+	status, err := m.LaunchCached("24.04", "vm")
 	// The list helper with list_fail only fails when colType == "n".
 	// The network check (colType == "4") still returns an IP.
 	if err != nil {
 		t.Fatalf("LaunchCached (list fails, fallback) failed: %v", err)
+	}
+	if status != CacheFallback {
+		t.Errorf("status = %d, want CacheFallback (%d)", status, CacheFallback)
 	}
 	if !m.running {
 		t.Error("expected running = true after LaunchCached fallback")
@@ -684,7 +698,7 @@ func TestLaunchCachedAlreadyRunning(t *testing.T) {
 		running:     true,
 		execCommand: fakeExecCommand("success"),
 	}
-	err := m.LaunchCached("24.04", "vm")
+	_, err := m.LaunchCached("24.04", "vm")
 	if err == nil {
 		t.Fatal("expected error for LaunchCached on running instance")
 	}
@@ -701,9 +715,12 @@ func TestLaunchCachedStartFails(t *testing.T) {
 		name:        "snapd-repro-abc123",
 		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=start_fail", "LXC_GOLDEN_NAMES=snapd-repro-base-2404"),
 	}
-	err := m.LaunchCached("24.04", "vm")
+	status, err := m.LaunchCached("24.04", "vm")
 	if err != nil {
 		t.Fatalf("LaunchCached (start fails, fallback) failed: %v", err)
+	}
+	if status != CacheFallback {
+		t.Errorf("status = %d, want CacheFallback (%d)", status, CacheFallback)
 	}
 	if !m.running {
 		t.Error("expected running = true after LaunchCached fallback")

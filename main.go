@@ -69,8 +69,17 @@ func launchVM(cmd *cobra.Command, ubuntuVersion string, step, totalSteps int) (*
 	instance := NewLXDManager()
 	_, _ = fmt.Fprintf(out, "\n%s Launching VM %s (ubuntu:%s)...\n",
 		boldCyan(fmt.Sprintf("Step %d/%d:", step, totalSteps)), instance.Name(), ubuntuVersion)
-	if err := instance.LaunchCached(ubuntuVersion, "vm"); err != nil {
+	status, err := instance.LaunchCached(ubuntuVersion, "vm")
+	if err != nil {
 		return nil, fmt.Errorf("launching VM: %w", err)
+	}
+	switch status {
+	case CacheHit:
+		_, _ = fmt.Fprintf(out, "  (from cached snapshot)\n")
+	case CacheMiss:
+		_, _ = fmt.Fprintf(out, "  (created cache for ubuntu:%s)\n", ubuntuVersion)
+	case CacheFallback:
+		_, _ = fmt.Fprintf(out, "  (fresh launch, cache unavailable)\n")
 	}
 	return instance, nil
 }
@@ -200,7 +209,7 @@ func runReproduceAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir
 	describeSkill := NewDescribeSkillTool(skillIndex)
 	loadSkill := NewLoadSkillTool(skillIndex)
 	queryRevisions := NewQueryRevisionsTool(revisionMap)
-	relaunchVM := NewRelaunchVMTool(instanceRef, NewLXDManager, cmd.ErrOrStderr())
+	relaunchVM := NewRelaunchVMTool(instanceRef, func() InstanceManager { return NewLXDManager() }, cmd.ErrOrStderr())
 
 	tools := []Tool{runCmd, reportResult, describeSkill, loadSkill, queryRevisions, relaunchVM}
 	if readFile != nil {

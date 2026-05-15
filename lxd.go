@@ -24,6 +24,11 @@ type InstanceManager interface {
 	// "container".
 	Launch(image string, instanceType string) error
 
+	// LaunchCached is like Launch but uses a golden-VM snapshot cache.
+	// It returns a CacheStatus indicating which path was taken (hit,
+	// miss, or fallback to a plain Launch).
+	LaunchCached(image string, instanceType string) (CacheStatus, error)
+
 	// Exec runs a command inside the instance and returns the combined
 	// stdout/stderr output and exit code.
 	Exec(ctx context.Context, command string) (*ExecResult, error)
@@ -357,13 +362,28 @@ func (m *LXDManager) ensureGoldenVM(goldenName, image, instanceType string) erro
 	return nil
 }
 
+// CacheStatus indicates which launch path was taken by LaunchCached.
+type CacheStatus int
+
+const (
+	// CacheHit means the instance was restored from a cached golden
+	// VM snapshot.
+	CacheHit CacheStatus = iota
+	// CacheMiss means a golden VM was created first, then the instance
+	// was restored from it.
+	CacheMiss
+	// CacheFallback means caching failed and a normal launch was used.
+	CacheFallback
+)
+
 // LaunchCached creates and starts an LXD instance using a cached golden
 // VM snapshot when available. On cache hit the instance is copied from
 // the snapshot and started; on cache miss a golden VM is created first.
 // If any cache operation fails, it falls back to a normal Launch.
-func (m *LXDManager) LaunchCached(image string, instanceType string) error {
+// The returned CacheStatus indicates which path was taken.
+func (m *LXDManager) LaunchCached(image string, instanceType string) (CacheStatus, error) {
 	if m.running {
-		return fmt.Errorf("instance %s is already running", m.name)
+		return CacheFallback, fmt.Errorf("instance %s is already running", m.name)
 	}
 
 	golden := goldenVMName(image)
@@ -372,25 +392,27 @@ func (m *LXDManager) LaunchCached(image string, instanceType string) error {
 	exists, err := m.goldenVMExists(golden)
 	if err != nil {
 		// Cannot check — fall back to normal launch.
-		return m.Launch(image, instanceType)
+		return CacheFallback, m.Launch(image, instanceType)
 	}
 
 	// Create the golden VM if it does not exist.
+	status := CacheHit
 	if !exists {
 		if err := m.ensureGoldenVM(golden, image, instanceType); err != nil {
-			return m.Launch(image, instanceType)
+			return CacheFallback, m.Launch(image, instanceType)
 		}
+		status = CacheMiss
 	}
 
 	// Copy from the golden snapshot.
 	if err := m.copyFromSnapshot(golden, goldenSnapshotName); err != nil {
-		return m.Launch(image, instanceType)
+		return CacheFallback, m.Launch(image, instanceType)
 	}
 
 	// Start the copied instance and wait for network.
 	if err := m.startInstance(); err != nil {
 		_ = m.Delete()
-		return m.Launch(image, instanceType)
+		return CacheFallback, m.Launch(image, instanceType)
 	}
 
 	timeout := 30 * time.Second
@@ -399,11 +421,11 @@ func (m *LXDManager) LaunchCached(image string, instanceType string) error {
 	}
 	if err := m.waitForNetwork(timeout, instanceType); err != nil {
 		_ = m.Delete()
-		return err
+		return status, err
 	}
 
 	m.running = true
-	return nil
+	return status, nil
 }
 
 // generateContainerName returns a name like "snapd-repro-a1b2c3".
