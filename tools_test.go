@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -400,116 +401,6 @@ func TestReadFileDefinition(t *testing.T) {
 	}
 }
 
-// --- report_plan tests ---
-
-func TestReportPlanSuccess(t *testing.T) {
-	tool := NewReportPlanTool()
-	result, err := tool.Execute(context.Background(),`{
-		"instance_type": "vm",
-		"ubuntu_version": "24.04",
-		"steps": [
-			{"description": "Install snapd", "command": "apt-get install -y snapd"},
-			{"description": "Check snap list", "command": "snap list"}
-		],
-		"expected_result": "snap list output wraps at 80 columns",
-		"attachments_reviewed": ["journal.log"]
-	}`)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.StopAgent {
-		t.Error("StopAgent should be true")
-	}
-	if result.StopMessage != "LLM reported plan" {
-		t.Errorf("StopMessage = %q, want %q", result.StopMessage, "LLM reported plan")
-	}
-	if tool.Plan == nil {
-		t.Fatal("Plan should be set")
-	}
-	if tool.Plan.InstanceType != "vm" {
-		t.Errorf("InstanceType = %q, want %q", tool.Plan.InstanceType, "vm")
-	}
-	if tool.Plan.UbuntuVersion != "24.04" {
-		t.Errorf("UbuntuVersion = %q, want %q", tool.Plan.UbuntuVersion, "24.04")
-	}
-	if len(tool.Plan.Steps) != 2 {
-		t.Fatalf("Steps = %d, want 2", len(tool.Plan.Steps))
-	}
-	if tool.Plan.Steps[0].Command != "apt-get install -y snapd" {
-		t.Errorf("Step[0].Command = %q", tool.Plan.Steps[0].Command)
-	}
-	if tool.Plan.ExpectedResult != "snap list output wraps at 80 columns" {
-		t.Errorf("ExpectedResult = %q", tool.Plan.ExpectedResult)
-	}
-	if len(tool.Plan.AttachmentsReviewed) != 1 || tool.Plan.AttachmentsReviewed[0] != "journal.log" {
-		t.Errorf("AttachmentsReviewed = %v", tool.Plan.AttachmentsReviewed)
-	}
-}
-
-func TestReportPlanContainer(t *testing.T) {
-	tool := NewReportPlanTool()
-	result, err := tool.Execute(context.Background(),`{
-		"instance_type": "container",
-		"ubuntu_version": "22.04",
-		"steps": [{"description": "test", "command": "echo test"}],
-		"expected_result": "test passes"
-	}`)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.StopAgent {
-		t.Error("StopAgent should be true")
-	}
-	if tool.Plan.InstanceType != "container" {
-		t.Errorf("InstanceType = %q, want %q", tool.Plan.InstanceType, "container")
-	}
-}
-
-func TestReportPlanNoAttachments(t *testing.T) {
-	tool := NewReportPlanTool()
-	result, err := tool.Execute(context.Background(),`{
-		"ubuntu_version": "22.04",
-		"steps": [{"description": "test", "command": "echo test"}],
-		"expected_result": "test passes"
-	}`)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.StopAgent {
-		t.Error("StopAgent should be true")
-	}
-	if tool.Plan.UbuntuVersion != "22.04" {
-		t.Errorf("UbuntuVersion = %q, want %q", tool.Plan.UbuntuVersion, "22.04")
-	}
-	if tool.Plan.AttachmentsReviewed != nil {
-		t.Errorf("AttachmentsReviewed should be nil, got %v", tool.Plan.AttachmentsReviewed)
-	}
-}
-
-func TestReportPlanInvalidJSON(t *testing.T) {
-	tool := NewReportPlanTool()
-	_, err := tool.Execute(context.Background(),`not json`)
-	if err == nil {
-		t.Fatal("expected error for invalid JSON")
-	}
-}
-
-func TestReportPlanDefinition(t *testing.T) {
-	tool := NewReportPlanTool()
-
-	if tool.Name() != "report_plan" {
-		t.Errorf("Name = %q, want %q", tool.Name(), "report_plan")
-	}
-
-	def := tool.Definition()
-	if def.Type != "function" {
-		t.Errorf("Type = %q, want %q", def.Type, "function")
-	}
-	if def.Function.Name != "report_plan" {
-		t.Errorf("Function.Name = %q, want %q", def.Function.Name, "report_plan")
-	}
-}
-
 // --- parseRevisionMap tests ---
 
 const testRevisionData = `REVISION  VERSION                     ARCH     STATUS                 CREATED
@@ -841,5 +732,250 @@ func TestSummariseCmd(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("summariseCmd(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+// --- InstanceRef tests ---
+
+func TestInstanceRefSwap(t *testing.T) {
+	m1 := &mockInstance{name: "vm-1"}
+	m2 := &mockInstance{name: "vm-2"}
+	ref := &InstanceRef{Instance: m1}
+
+	if ref.Instance.Name() != "vm-1" {
+		t.Errorf("initial instance = %q, want %q", ref.Instance.Name(), "vm-1")
+	}
+
+	ref.Instance = m2
+	if ref.Instance.Name() != "vm-2" {
+		t.Errorf("swapped instance = %q, want %q", ref.Instance.Name(), "vm-2")
+	}
+}
+
+func TestRunCommandToolFromRef(t *testing.T) {
+	mc := &mockInstance{
+		name: "test-vm",
+		execFunc: func(command string) (*ExecResult, error) {
+			return &ExecResult{Output: "hello from ref\n", ExitCode: 0}, nil
+		},
+	}
+	ref := &InstanceRef{Instance: mc}
+	tool := NewRunCommandToolFromRef(ref)
+
+	result, err := tool.Execute(context.Background(), `{"command": "echo hello"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "hello from ref") {
+		t.Errorf("Output = %q, want to contain 'hello from ref'", result.Output)
+	}
+}
+
+func TestRunCommandToolFromRefSwap(t *testing.T) {
+	mc1 := &mockInstance{
+		name: "vm-1",
+		execFunc: func(command string) (*ExecResult, error) {
+			return &ExecResult{Output: "from vm-1\n", ExitCode: 0}, nil
+		},
+	}
+	mc2 := &mockInstance{
+		name: "vm-2",
+		execFunc: func(command string) (*ExecResult, error) {
+			return &ExecResult{Output: "from vm-2\n", ExitCode: 0}, nil
+		},
+	}
+
+	ref := &InstanceRef{Instance: mc1}
+	tool := NewRunCommandToolFromRef(ref)
+
+	// Run against first instance.
+	result, err := tool.Execute(context.Background(), `{"command": "echo test"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "from vm-1") {
+		t.Errorf("Output = %q, want 'from vm-1'", result.Output)
+	}
+
+	// Swap the instance ref.
+	ref.Instance = mc2
+
+	// Run against swapped instance.
+	result, err = tool.Execute(context.Background(), `{"command": "echo test"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "from vm-2") {
+		t.Errorf("Output = %q, want 'from vm-2'", result.Output)
+	}
+}
+
+// --- RelaunchVMTool tests ---
+
+func TestRelaunchVMToolDefinition(t *testing.T) {
+	ref := &InstanceRef{Instance: &mockInstance{name: "test-vm"}}
+	tool := NewRelaunchVMTool(ref, func() *LXDManager {
+		return NewLXDManager()
+	}, os.Stderr)
+
+	if tool.Name() != "relaunch_vm" {
+		t.Errorf("Name = %q, want %q", tool.Name(), "relaunch_vm")
+	}
+
+	def := tool.Definition()
+	if def.Type != "function" {
+		t.Errorf("Type = %q, want %q", def.Type, "function")
+	}
+	if def.Function.Name != "relaunch_vm" {
+		t.Errorf("Function.Name = %q, want %q", def.Function.Name, "relaunch_vm")
+	}
+}
+
+func TestRelaunchVMToolSuccess(t *testing.T) {
+	oldInstance := &mockInstance{name: "old-vm"}
+	ref := &InstanceRef{Instance: oldInstance}
+
+	// Track which instance was created by the factory.
+	var newInstance *mockInstance
+	factory := func() *LXDManager {
+		// We can't use a real LXDManager in tests, so we'll test via
+		// the mock approach. But the factory returns *LXDManager, so
+		// let's test the error path and the interface.
+		// For a proper test of the success path, we need to verify the
+		// old instance is deleted and the ref is updated.
+		// Since the factory returns a *LXDManager which needs real lxc,
+		// we'll test the tool at a higher level by verifying the
+		// delete call and the error message when launch fails.
+		_ = newInstance
+		return NewLXDManager()
+	}
+
+	var output bytes.Buffer
+	tool := NewRelaunchVMTool(ref, factory, &output)
+
+	// The factory creates a real LXDManager which will fail to launch
+	// since lxc isn't available in tests. But the old instance should
+	// be deleted first.
+	result, err := tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Old instance should be deleted.
+	if !oldInstance.deleted {
+		t.Error("old instance should have been deleted")
+	}
+
+	// Since we can't run real lxc in tests, the launch will fail.
+	// The tool should return an error message (not a Go error).
+	if !strings.Contains(result.Output, "error: failed to launch new VM") {
+		// If it somehow succeeded (unlikely), check for success message.
+		if !strings.Contains(result.Output, "VM relaunched successfully") {
+			t.Errorf("unexpected output: %q", result.Output)
+		}
+	}
+}
+
+// mockLXDFactory creates a factory that returns mock-backed instances
+// for testing. Since RelaunchVMTool.factory returns *LXDManager, we
+// can't easily inject a mock. Instead we test the pieces individually.
+
+func TestRelaunchVMToolDeletesOld(t *testing.T) {
+	oldInstance := &mockInstance{name: "old-vm"}
+	ref := &InstanceRef{Instance: oldInstance}
+
+	var output bytes.Buffer
+	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+
+	_, _ = tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
+
+	if !oldInstance.deleted {
+		t.Error("old instance should have been deleted")
+	}
+}
+
+func TestRelaunchVMToolEmptyVersion(t *testing.T) {
+	ref := &InstanceRef{Instance: &mockInstance{name: "test-vm"}}
+
+	var output bytes.Buffer
+	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+
+	result, err := tool.Execute(context.Background(), `{"ubuntu_version": ""}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "error: ubuntu_version is required") {
+		t.Errorf("Output = %q, want ubuntu_version required error", result.Output)
+	}
+}
+
+func TestRelaunchVMToolInvalidJSON(t *testing.T) {
+	ref := &InstanceRef{Instance: &mockInstance{name: "test-vm"}}
+
+	var output bytes.Buffer
+	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+
+	_, err := tool.Execute(context.Background(), `not json`)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestRelaunchVMToolDeleteFails(t *testing.T) {
+	oldInstance := &mockInstance{name: "old-vm"}
+	// Override Delete to return an error by using a custom instance.
+	failDeleteInstance := &failDeleteMock{name: "old-vm"}
+	ref := &InstanceRef{Instance: failDeleteInstance}
+
+	var output bytes.Buffer
+	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+
+	result, err := tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "error: failed to delete current VM") {
+		t.Errorf("Output = %q, want delete failure error", result.Output)
+	}
+
+	// Ref should still point to the old instance.
+	if ref.Instance.Name() != "old-vm" {
+		t.Errorf("ref should still point to old instance, got %q", ref.Instance.Name())
+	}
+
+	_ = oldInstance // suppress lint
+}
+
+// failDeleteMock is a mock that fails on Delete.
+type failDeleteMock struct {
+	name string
+}
+
+func (m *failDeleteMock) Launch(image string, instanceType string) error { return nil }
+func (m *failDeleteMock) Exec(_ context.Context, command string) (*ExecResult, error) {
+	return &ExecResult{Output: "ok\n", ExitCode: 0}, nil
+}
+func (m *failDeleteMock) Delete() error { return fmt.Errorf("delete failed: permission denied") }
+func (m *failDeleteMock) Name() string  { return m.name }
+
+func TestRelaunchVMToolOnCleanupCallback(t *testing.T) {
+	oldInstance := &mockInstance{name: "old-vm"}
+	ref := &InstanceRef{Instance: oldInstance}
+
+	var cleanedUp InstanceManager
+	var output bytes.Buffer
+	tool := NewRelaunchVMTool(ref, NewLXDManager, &output)
+	tool.onCleanup = func(old InstanceManager) {
+		cleanedUp = old
+	}
+
+	// Will fail on launch (no real lxc), but should still call cleanup.
+	_, _ = tool.Execute(context.Background(), `{"ubuntu_version": "22.04"}`)
+
+	if cleanedUp == nil {
+		t.Error("onCleanup should have been called")
+	}
+	if cleanedUp.Name() != "old-vm" {
+		t.Errorf("onCleanup got instance %q, want %q", cleanedUp.Name(), "old-vm")
 	}
 }

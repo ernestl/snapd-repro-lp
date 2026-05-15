@@ -38,6 +38,11 @@ git checkout 2.63
 | `httputil/` | HTTP client utilities, logged transport, retry logic |
 | `wrappers/` | Generates systemd units, desktop files, etc. for installed snaps |
 | `sandbox/` | AppArmor, seccomp, cgroup sandbox backends |
+| `sandbox/apparmor/` | AppArmor backend: profile compilation, loading/reloading, caching, and runtime management via `apparmor_parser` |
+| `cmd/snap-confine/` | C binary for snap confinement setup: AppArmor profile transitions, mount namespace setup, cgroup management. Executed by `snap run` before the confined app starts |
+| `cmd/libsnap-confine-private/` | Shared C library used by snap-confine: AppArmor support, mount utilities, cleanup functions |
+| `cmd/snapd-apparmor/` | Helper binary invoked by `snapd.apparmor.service` at boot to load all snap AppArmor profiles |
+| `data/systemd/` | Systemd unit templates for snapd services (`snapd.service`, `snapd.apparmor.service`, etc.) |
 
 ### How a CLI command flows through the code
 
@@ -142,6 +147,9 @@ grep -rn '/v2/snaps' daemon/api*.go
 | Store communication error | `store/store.go` -> `httputil/` |
 | Systemd service issue | `wrappers/services.go` |
 | AppArmor/seccomp denial | `interfaces/builtin/<name>.go` -> `sandbox/apparmor/` |
+| snap-confine / confinement error | `cmd/snap-confine/` -> `cmd/libsnap-confine-private/` |
+| AppArmor profile loading/reload | `sandbox/apparmor/profile.go` -> `cmd/snapd-apparmor/` |
+| Boot-time profile loading | `data/systemd/snapd.apparmor.service.in` -> `cmd/snapd-apparmor/` |
 
 ## Debug environment variables
 

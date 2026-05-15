@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestHelperProcess is invoked by the mock exec.Command calls. It is
@@ -56,6 +57,29 @@ func handleLXCHelper(args []string) {
 		os.Exit(0)
 
 	case "list":
+		// Determine column type: -c n (name listing) vs -c 4 (IPv4).
+		colType := ""
+		for i, a := range args {
+			if a == "-c" && i+1 < len(args) {
+				colType = args[i+1]
+				break
+			}
+		}
+
+		if colType == "n" {
+			// Name listing for golden VM existence check.
+			if behavior == "list_fail" {
+				fmt.Fprintf(os.Stderr, "Error: list failed")
+				os.Exit(1)
+			}
+			names := os.Getenv("LXC_GOLDEN_NAMES")
+			if names != "" {
+				fmt.Print(names)
+			}
+			os.Exit(0)
+		}
+
+		// IPv4 listing (network check).
 		if behavior == "network_timeout" {
 			// Simulate no network — output empty/no IP.
 			fmt.Println(",,No,,")
@@ -93,6 +117,26 @@ func handleLXCHelper(args []string) {
 		// For bash -c commands:
 		if len(remaining) >= 2 && remaining[0] == "bash" && remaining[1] == "-c" {
 			command := remaining[2]
+
+			// cloud-init wait
+			if strings.Contains(command, "cloud-init") {
+				if behavior == "cloud_init_fail" {
+					fmt.Println("error: cloud-init not available")
+					os.Exit(1)
+				}
+				fmt.Println("status: done")
+				os.Exit(0)
+			}
+
+			// snap seeding wait
+			if strings.Contains(command, "snap wait") {
+				if behavior == "snap_seed_fail" {
+					fmt.Println("error: snap seeding timed out")
+					os.Exit(1)
+				}
+				os.Exit(0)
+			}
+
 			if behavior == "exec_fail" {
 				_, _ = fmt.Fprintf(os.Stdout, "command not found: %s\n", command)
 				os.Exit(127)
@@ -105,6 +149,34 @@ func handleLXCHelper(args []string) {
 	case "delete":
 		if behavior == "delete_fail" {
 			fmt.Fprintf(os.Stderr, "Error: Container not found")
+			os.Exit(1)
+		}
+		os.Exit(0)
+
+	case "stop":
+		if behavior == "stop_fail" {
+			fmt.Fprintf(os.Stderr, "Error: Instance not found")
+			os.Exit(1)
+		}
+		os.Exit(0)
+
+	case "snapshot":
+		if behavior == "snapshot_fail" {
+			fmt.Fprintf(os.Stderr, "Error: Snapshot failed")
+			os.Exit(1)
+		}
+		os.Exit(0)
+
+	case "copy":
+		if behavior == "copy_fail" {
+			fmt.Fprintf(os.Stderr, "Error: Not found")
+			os.Exit(1)
+		}
+		os.Exit(0)
+
+	case "start":
+		if behavior == "start_fail" {
+			fmt.Fprintf(os.Stderr, "Error: Instance already running")
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -305,5 +377,402 @@ func TestNewLXDManagerFromName(t *testing.T) {
 	}
 	if !m.running {
 		t.Error("expected running = true for existing container")
+	}
+}
+
+// --- VM snapshot cache tests ---
+
+// fakeExecCommandEnv returns a function that creates exec.Cmd pointing
+// back to TestHelperProcess with arbitrary environment variables set.
+func fakeExecCommandEnv(envs ...string) func(_ context.Context, name string, args ...string) *exec.Cmd {
+	return func(_ context.Context, name string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", name}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		env := append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+		env = append(env, envs...)
+		cmd.Env = env
+		return cmd
+	}
+}
+
+func TestGoldenVMName(t *testing.T) {
+	tests := []struct {
+		version string
+		want    string
+	}{
+		{"24.04", "snapd-repro-base-2404"},
+		{"22.04", "snapd-repro-base-2204"},
+		{"20.04", "snapd-repro-base-2004"},
+		{"25.10", "snapd-repro-base-2510"},
+	}
+	for _, tt := range tests {
+		got := goldenVMName(tt.version)
+		if got != tt.want {
+			t.Errorf("goldenVMName(%q) = %q, want %q", tt.version, got, tt.want)
+		}
+	}
+}
+
+func TestGoldenVMExists(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-instance",
+		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=success", "LXC_GOLDEN_NAMES=snapd-repro-base-2404\nsnapd-repro-base-2204"),
+	}
+	exists, err := m.goldenVMExists("snapd-repro-base-2404")
+	if err != nil {
+		t.Fatalf("goldenVMExists error: %v", err)
+	}
+	if !exists {
+		t.Error("expected golden VM to exist")
+	}
+}
+
+func TestGoldenVMNotExists(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-instance",
+		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=success", "LXC_GOLDEN_NAMES="),
+	}
+	exists, err := m.goldenVMExists("snapd-repro-base-2404")
+	if err != nil {
+		t.Fatalf("goldenVMExists error: %v", err)
+	}
+	if exists {
+		t.Error("expected golden VM to not exist")
+	}
+}
+
+func TestGoldenVMExistsListFails(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-instance",
+		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=list_fail"),
+	}
+	_, err := m.goldenVMExists("snapd-repro-base-2404")
+	if err == nil {
+		t.Fatal("expected error when list fails")
+	}
+}
+
+func TestStop(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		running:     true,
+		execCommand: fakeExecCommand("success"),
+	}
+	if err := m.stop(); err != nil {
+		t.Fatalf("stop failed: %v", err)
+	}
+	if m.running {
+		t.Error("expected running = false after stop")
+	}
+}
+
+func TestStopFail(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		running:     true,
+		execCommand: fakeExecCommand("stop_fail"),
+	}
+	err := m.stop()
+	if err == nil {
+		t.Fatal("expected error for stop failure")
+	}
+	if !strings.Contains(err.Error(), "Instance not found") {
+		t.Errorf("error = %q, want 'Instance not found'", err.Error())
+	}
+}
+
+func TestSnapshotInstance(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		execCommand: fakeExecCommand("success"),
+	}
+	if err := m.snapshotInstance("ready"); err != nil {
+		t.Fatalf("snapshotInstance failed: %v", err)
+	}
+}
+
+func TestSnapshotInstanceFail(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		execCommand: fakeExecCommand("snapshot_fail"),
+	}
+	err := m.snapshotInstance("ready")
+	if err == nil {
+		t.Fatal("expected error for snapshot failure")
+	}
+	if !strings.Contains(err.Error(), "Snapshot failed") {
+		t.Errorf("error = %q, want 'Snapshot failed'", err.Error())
+	}
+}
+
+func TestCopyFromSnapshot(t *testing.T) {
+	m := &LXDManager{
+		name:        "new-instance",
+		execCommand: fakeExecCommand("success"),
+	}
+	if err := m.copyFromSnapshot("snapd-repro-base-2404", "ready"); err != nil {
+		t.Fatalf("copyFromSnapshot failed: %v", err)
+	}
+}
+
+func TestCopyFromSnapshotFail(t *testing.T) {
+	m := &LXDManager{
+		name:        "new-instance",
+		execCommand: fakeExecCommand("copy_fail"),
+	}
+	err := m.copyFromSnapshot("snapd-repro-base-2404", "ready")
+	if err == nil {
+		t.Fatal("expected error for copy failure")
+	}
+	if !strings.Contains(err.Error(), "Not found") {
+		t.Errorf("error = %q, want 'Not found'", err.Error())
+	}
+}
+
+func TestStartInstance(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		execCommand: fakeExecCommand("success"),
+	}
+	if err := m.startInstance(); err != nil {
+		t.Fatalf("startInstance failed: %v", err)
+	}
+}
+
+func TestStartInstanceFail(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		execCommand: fakeExecCommand("start_fail"),
+	}
+	err := m.startInstance()
+	if err == nil {
+		t.Fatal("expected error for start failure")
+	}
+	if !strings.Contains(err.Error(), "Instance already running") {
+		t.Errorf("error = %q, want 'Instance already running'", err.Error())
+	}
+}
+
+func TestWaitForCloudInit(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		running:     true,
+		execCommand: fakeExecCommand("success"),
+	}
+	err := m.waitForCloudInit(context.Background(), 5*time.Second)
+	if err != nil {
+		t.Fatalf("waitForCloudInit failed: %v", err)
+	}
+}
+
+func TestWaitForCloudInitFail(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		running:     true,
+		execCommand: fakeExecCommand("cloud_init_fail"),
+	}
+	err := m.waitForCloudInit(context.Background(), 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error for cloud-init failure")
+	}
+	if !strings.Contains(err.Error(), "cloud-init") {
+		t.Errorf("error = %q, want cloud-init related error", err.Error())
+	}
+}
+
+func TestWaitForSnapSeeding(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		running:     true,
+		execCommand: fakeExecCommand("success"),
+	}
+	err := m.waitForSnapSeeding(context.Background(), 5*time.Second)
+	if err != nil {
+		t.Fatalf("waitForSnapSeeding failed: %v", err)
+	}
+}
+
+func TestWaitForSnapSeedingFail(t *testing.T) {
+	m := &LXDManager{
+		name:        "test-vm",
+		running:     true,
+		execCommand: fakeExecCommand("snap_seed_fail"),
+	}
+	err := m.waitForSnapSeeding(context.Background(), 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error for snap seeding failure")
+	}
+	if !strings.Contains(err.Error(), "snap seeding") {
+		t.Errorf("error = %q, want snap seeding related error", err.Error())
+	}
+}
+
+func TestLaunchCachedHit(t *testing.T) {
+	// Golden VM exists — should copy from snapshot and start.
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=success", "LXC_GOLDEN_NAMES=snapd-repro-base-2404"),
+	}
+	if err := m.LaunchCached("24.04", "vm"); err != nil {
+		t.Fatalf("LaunchCached (cache hit) failed: %v", err)
+	}
+	if !m.running {
+		t.Error("expected running = true after LaunchCached")
+	}
+}
+
+func TestLaunchCachedMiss(t *testing.T) {
+	// Golden VM does not exist — should create it, then copy+start.
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=success", "LXC_GOLDEN_NAMES="),
+	}
+	if err := m.LaunchCached("24.04", "vm"); err != nil {
+		t.Fatalf("LaunchCached (cache miss) failed: %v", err)
+	}
+	if !m.running {
+		t.Error("expected running = true after LaunchCached")
+	}
+}
+
+func TestLaunchCachedCopyFails(t *testing.T) {
+	// Golden VM exists but copy fails — should fall back to normal Launch.
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=copy_fail", "LXC_GOLDEN_NAMES=snapd-repro-base-2404"),
+	}
+	// copy_fail makes lxc copy fail, but lxc launch (fallback) also
+	// needs to succeed. The helper only fails on "launch_fail" for
+	// the launch subcommand, so this works.
+	err := m.LaunchCached("24.04", "vm")
+	// The fallback Launch() will also fail because waitForNetwork
+	// calls lxc list -c 4 which succeeds, so it should work.
+	// However, the copy_fail behavior doesn't affect launch or list.
+	if err != nil {
+		t.Fatalf("LaunchCached (copy fails, fallback) failed: %v", err)
+	}
+	if !m.running {
+		t.Error("expected running = true after LaunchCached fallback")
+	}
+}
+
+func TestLaunchCachedListFails(t *testing.T) {
+	// Cannot check golden VM existence — should fall back to normal Launch.
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=list_fail"),
+	}
+	// list_fail makes lxc list -c n fail, but fallback Launch() uses
+	// lxc list -c 4 which also fails. We need different behavior...
+	// Actually, list_fail affects the -c n path only. The -c 4 path
+	// falls through to the normal IP listing. Let's verify.
+	err := m.LaunchCached("24.04", "vm")
+	// The list helper with list_fail only fails when colType == "n".
+	// The network check (colType == "4") still returns an IP.
+	if err != nil {
+		t.Fatalf("LaunchCached (list fails, fallback) failed: %v", err)
+	}
+	if !m.running {
+		t.Error("expected running = true after LaunchCached fallback")
+	}
+}
+
+func TestLaunchCachedAlreadyRunning(t *testing.T) {
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		running:     true,
+		execCommand: fakeExecCommand("success"),
+	}
+	err := m.LaunchCached("24.04", "vm")
+	if err == nil {
+		t.Fatal("expected error for LaunchCached on running instance")
+	}
+	if !strings.Contains(err.Error(), "already running") {
+		t.Errorf("error = %q, want 'already running'", err.Error())
+	}
+}
+
+func TestLaunchCachedStartFails(t *testing.T) {
+	// Golden exists, copy succeeds, but start fails — should fall back.
+	// With start_fail, the fallback Launch() uses lxc launch (not
+	// lxc start), so it succeeds.
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommandEnv("LXC_BEHAVIOR=start_fail", "LXC_GOLDEN_NAMES=snapd-repro-base-2404"),
+	}
+	err := m.LaunchCached("24.04", "vm")
+	if err != nil {
+		t.Fatalf("LaunchCached (start fails, fallback) failed: %v", err)
+	}
+	if !m.running {
+		t.Error("expected running = true after LaunchCached fallback")
+	}
+}
+
+func TestEnsureGoldenVMCloudInitFails(t *testing.T) {
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommand("cloud_init_fail"),
+	}
+	err := m.ensureGoldenVM("snapd-repro-base-2404", "24.04", "vm")
+	if err == nil {
+		t.Fatal("expected error when cloud-init fails")
+	}
+	if !strings.Contains(err.Error(), "cloud-init") {
+		t.Errorf("error = %q, want cloud-init related error", err.Error())
+	}
+}
+
+func TestEnsureGoldenVMSnapSeedFails(t *testing.T) {
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommand("snap_seed_fail"),
+	}
+	err := m.ensureGoldenVM("snapd-repro-base-2404", "24.04", "vm")
+	if err == nil {
+		t.Fatal("expected error when snap seeding fails")
+	}
+	if !strings.Contains(err.Error(), "snap seeding") {
+		t.Errorf("error = %q, want snap seeding related error", err.Error())
+	}
+}
+
+func TestEnsureGoldenVMStopFails(t *testing.T) {
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommand("stop_fail"),
+	}
+	err := m.ensureGoldenVM("snapd-repro-base-2404", "24.04", "vm")
+	if err == nil {
+		t.Fatal("expected error when stop fails")
+	}
+	if !strings.Contains(err.Error(), "stopping golden VM") {
+		t.Errorf("error = %q, want 'stopping golden VM'", err.Error())
+	}
+}
+
+func TestEnsureGoldenVMSnapshotFails(t *testing.T) {
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommand("snapshot_fail"),
+	}
+	err := m.ensureGoldenVM("snapd-repro-base-2404", "24.04", "vm")
+	if err == nil {
+		t.Fatal("expected error when snapshot fails")
+	}
+	if !strings.Contains(err.Error(), "snapshotting golden VM") {
+		t.Errorf("error = %q, want 'snapshotting golden VM'", err.Error())
+	}
+}
+
+func TestEnsureGoldenVMSuccess(t *testing.T) {
+	m := &LXDManager{
+		name:        "snapd-repro-abc123",
+		execCommand: fakeExecCommand("success"),
+	}
+	err := m.ensureGoldenVM("snapd-repro-base-2404", "24.04", "vm")
+	if err != nil {
+		t.Fatalf("ensureGoldenVM failed: %v", err)
 	}
 }

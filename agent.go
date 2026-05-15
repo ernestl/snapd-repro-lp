@@ -20,7 +20,7 @@ type AgentConfig struct {
 // AgentResult holds the outcome of an agent run.
 type AgentResult struct {
 	// StoppedByTool is the name of the tool that stopped the agent
-	// (e.g. "report_result" or "report_plan"). Empty if the agent
+	// (e.g. "report_result"). Empty if the agent
 	// stopped because the LLM returned a text response or hit max
 	// iterations.
 	StoppedByTool string

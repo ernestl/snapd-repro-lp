@@ -18,7 +18,6 @@ var (
 	forceOverwrite bool
 	modelName      string
 	maxIterations  int
-	ubuntuOverride string
 )
 
 //go:embed skills.json
@@ -70,7 +69,7 @@ func launchVM(cmd *cobra.Command, ubuntuVersion string, step, totalSteps int) (*
 	instance := NewLXDManager()
 	_, _ = fmt.Fprintf(out, "\n%s Launching VM %s (ubuntu:%s)...\n",
 		boldCyan(fmt.Sprintf("Step %d/%d:", step, totalSteps)), instance.Name(), ubuntuVersion)
-	if err := instance.Launch(ubuntuVersion, "vm"); err != nil {
+	if err := instance.LaunchCached(ubuntuVersion, "vm"); err != nil {
 		return nil, fmt.Errorf("launching VM: %w", err)
 	}
 	return instance, nil
@@ -175,9 +174,12 @@ func fetchAndPrepareBug(cmd *cobra.Command, bugRef string, step, totalSteps int)
 	return bug, bugDir, nil
 }
 
-// --- helper: run the planning agent ---
+// --- helper: run the single-phase reproduce agent ---
 
-func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir string, instance InstanceManager) (*ReproPlan, *Usage, string, error) {
+// runReproduceAgent runs the single-phase agent that analyzes the bug and
+// attempts reproduction in one session. The instanceRef is shared with the
+// RelaunchVMTool so the LLM can swap the VM mid-conversation.
+func runReproduceAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir string, instanceRef *InstanceRef) (*ReproResult, *Usage, string, error) {
 	resolveModel()
 
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
@@ -187,18 +189,20 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 
 	out := cmd.OutOrStdout()
 
-	// Build planning tools.
+	// Build tools with a shared instance ref.
 	attachmentsDir := filepath.Join(bugDir, "attachments")
 	var readFile *ReadFileTool
 	if len(bug.Attachments) > 0 {
 		readFile = NewReadFileTool(attachmentsDir)
 	}
-	runCmd := NewRunCommandTool(instance)
-	reportPlan := NewReportPlanTool()
+	runCmd := NewRunCommandToolFromRef(instanceRef)
+	reportResult := NewReportResultTool()
 	describeSkill := NewDescribeSkillTool(skillIndex)
 	loadSkill := NewLoadSkillTool(skillIndex)
 	queryRevisions := NewQueryRevisionsTool(revisionMap)
-	tools := []Tool{runCmd, reportPlan, describeSkill, loadSkill, queryRevisions}
+	relaunchVM := NewRelaunchVMTool(instanceRef, NewLXDManager, cmd.ErrOrStderr())
+
+	tools := []Tool{runCmd, reportResult, describeSkill, loadSkill, queryRevisions, relaunchVM}
 	if readFile != nil {
 		tools = append(tools, readFile)
 	}
@@ -214,80 +218,20 @@ func runPlanningAgent(ctx context.Context, cmd *cobra.Command, bug *Bug, bugDir 
 	})
 
 	// Build prompts.
-	systemPrompt := BuildPlanningPrompt(bug, instance.Name(), skillIndex)
-	userMessage := BuildPlanningUserMessage(bug)
+	systemPrompt := BuildReproducePrompt(bug, instanceRef.Instance.Name(), skillIndex)
+	userMessage := BuildReproduceUserMessage(bug)
 
 	// Save prompt for inspection.
-	promptFile := filepath.Join(bugDir, "planning-prompt.html")
-	if err := SavePromptHTML(promptFile, fmt.Sprintf("Planning Prompt — Bug #%d", bug.ID), systemPrompt, userMessage); err != nil {
+	promptFile := filepath.Join(bugDir, "reproduce-prompt.html")
+	if err := SavePromptHTML(promptFile, fmt.Sprintf("Reproduce Prompt — Bug #%d", bug.ID), systemPrompt, userMessage); err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", yellow(fmt.Sprintf("warning: failed to save prompt HTML: %v", err)))
 	} else {
-		_, _ = fmt.Fprintf(out, "  Generated planning prompt: %s\n", blue(fileHyperlink(promptFile)))
+		_, _ = fmt.Fprintf(out, "  Generated reproduce prompt: %s\n", blue(fileHyperlink(promptFile)))
 	}
 
 	result, err := agent.Run(ctx, systemPrompt, userMessage)
 	if err != nil {
-		return nil, nil, agent.Log(), fmt.Errorf("planning agent failed: %w", err)
-	}
-
-	// The agent returned via report_plan → reportPlan.Plan is set.
-	if reportPlan.Plan != nil {
-		plan := reportPlan.Plan
-		plan.BugID = bug.ID
-		plan.Title = bug.Title
-		plan.ModelUsed = modelName
-
-		return plan, &agent.TotalUsage, agent.Log(), nil
-	}
-
-	// Fallback: agent stopped without calling report_plan.
-	return nil, nil, agent.Log(), fmt.Errorf("planning agent did not produce a plan. Last output: %s", result.LastMessage)
-}
-
-// --- helper: run the execution agent ---
-
-func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan, bugDir string, instance InstanceManager) (*ReproResult, *Usage, string, error) {
-	resolveModel()
-
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
-		return nil, nil, "", fmt.Errorf("OPENROUTER_API_KEY environment variable is not set")
-	}
-
-	out := cmd.OutOrStdout()
-
-	// Build execution tools.
-	runCmd := NewRunCommandTool(instance)
-	reportResult := NewReportResultTool()
-	describeSkill := NewDescribeSkillTool(skillIndex)
-	loadSkill := NewLoadSkillTool(skillIndex)
-	queryRevisions := NewQueryRevisionsTool(revisionMap)
-	executor := NewToolExecutor(runCmd, reportResult, describeSkill, loadSkill, queryRevisions)
-
-	// Build LLM client and agent.
-	llmClient := NewLLMClient(apiKey, modelName)
-	agent := NewAgent(llmClient, executor, AgentConfig{
-		MaxIterations: maxIterations,
-		Verbose:       verbose,
-		Output:        cmd.ErrOrStderr(),
-		Prefix:        "  ",
-	})
-
-	// Build prompts.
-	systemPrompt := BuildExecutionPrompt(plan, instance.Name(), skillIndex)
-	userMessage := BuildExecutionUserMessage(plan)
-
-	// Save prompt for inspection.
-	promptFile := filepath.Join(bugDir, "execution-prompt.html")
-	if err := SavePromptHTML(promptFile, fmt.Sprintf("Execution Prompt — Bug #%d", plan.BugID), systemPrompt, userMessage); err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", yellow(fmt.Sprintf("warning: failed to save prompt HTML: %v", err)))
-	} else {
-		_, _ = fmt.Fprintf(out, "  Generated execution prompt: %s\n", blue(fileHyperlink(promptFile)))
-	}
-
-	result, err := agent.Run(ctx, systemPrompt, userMessage)
-	if err != nil {
-		return nil, nil, agent.Log(), fmt.Errorf("execution agent failed: %w", err)
+		return nil, nil, agent.Log(), fmt.Errorf("reproduce agent failed: %w", err)
 	}
 
 	// Extract the structured result from the report_result tool.
@@ -316,7 +260,7 @@ func runExecutionAgent(ctx context.Context, cmd *cobra.Command, plan *ReproPlan,
 	return fallback, &agent.TotalUsage, agent.Log(), nil
 }
 
-// --- helper: print and save execution result ---
+// --- helper: print and save result ---
 
 func saveExecutionResult(cmd *cobra.Command, result *ReproResult, bugDir string) {
 	out := cmd.OutOrStdout()
@@ -360,17 +304,18 @@ func saveAgentLog(cmd *cobra.Command, log, path string) {
 	}
 }
 
-// --- plan command ---
+// --- reproduce command ---
 
-var planCmd = &cobra.Command{
-	Use:   "plan [bug-ref]",
-	Short: "Analyze a bug and produce a reproduction plan",
-	Long: `Fetch a Launchpad bug report, analyze it with an LLM, and produce a structured
-reproduction plan (plan.json). The plan includes the Ubuntu version to use,
-step-by-step commands, and expected results.
+var reproduceCmd = &cobra.Command{
+	Use:   "reproduce [bug-ref]",
+	Short: "Analyze and reproduce a bug in one step",
+	Long: `Fetch a Launchpad bug report, analyze it with an LLM, and attempt to reproduce
+the bug inside an LXD VM — all in a single agent session. The LLM receives the
+full bug context and can investigate, determine the correct Ubuntu version
+(relaunching the VM if needed), and execute reproduction steps.
 
 Requires OPENROUTER_API_KEY to be set.`,
-	Example: "  snapd-repro-lp plan 1662786",
+	Example: "  snapd-repro-lp reproduce 1662786",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		bug, bugDir, err := fetchAndPrepareBug(cmd, args[0], 1, 3)
@@ -378,108 +323,34 @@ Requires OPENROUTER_API_KEY to be set.`,
 			return err
 		}
 
+		apiKey := os.Getenv("OPENROUTER_API_KEY")
+		if apiKey == "" {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nSet OPENROUTER_API_KEY to enable AI-assisted reproduction.\n")
+			return nil
+		}
+
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 
 		out := cmd.OutOrStdout()
 
-		// Launch a default VM for investigation during planning.
+		// Launch default VM.
 		instance, err := launchVM(cmd, defaultUbuntuVersion, 2, 3)
 		if err != nil {
 			return err
 		}
-		defer cleanupVM(cmd, instance)
+		// Use a shared InstanceRef so the LLM can relaunch the VM.
+		instanceRef := &InstanceRef{Instance: instance}
+		defer func() {
+			cleanupVM(cmd, instanceRef.Instance.(*LXDManager))
+		}()
 
+		// Run the single-phase agent.
 		resolveModel()
-		_, _ = fmt.Fprintf(out, "\n%s Planning reproduction (model: %s)...\n", boldCyan("Step 3/3:"), modelName)
+		_, _ = fmt.Fprintf(out, "\n%s Reproducing bug (model: %s)...\n", boldCyan("Step 3/3:"), modelName)
 
-		plan, planUsage, planLog, err := runPlanningAgent(ctx, cmd, bug, bugDir, instance)
-		saveAgentLog(cmd, planLog, filepath.Join(bugDir, "planning-log.txt"))
-		if err != nil {
-			return err
-		}
-
-		// Save plan.
-		planFile := filepath.Join(bugDir, "plan.json")
-		if err := SavePlan(plan, planFile); err != nil {
-			return fmt.Errorf("saving plan: %w", err)
-		}
-		_, _ = fmt.Fprintf(out, "  Saved plan to %s\n", blue(fileHyperlink(planFile)))
-
-		_, _ = fmt.Fprintf(out, "\n  Run the plan with:\n")
-		_, _ = fmt.Fprintf(out, "    snapd-repro-lp exec %d\n", plan.BugID)
-
-		if planUsage != nil {
-			_, _ = fmt.Fprintf(out, "\n%s\n",
-				dim(fmt.Sprintf("Token usage: %d prompt + %d completion = %d total",
-					planUsage.PromptTokens, planUsage.CompletionTokens, planUsage.TotalTokens)))
-		}
-
-		return nil
-	},
-}
-
-// --- exec command ---
-
-var execCmd = &cobra.Command{
-	Use:   "exec [bug-ref]",
-	Short: "Execute a reproduction plan in an LXD container",
-	Long: `Look up a plan.json produced by the plan command for the given bug, launch an
-LXD container with the specified Ubuntu version, and execute the reproduction
-steps. The bug reference can be a numeric ID or a Launchpad URL.
-
-The plan is expected at <output-dir>/bug-<ID>/plan.json.
-
-Requires OPENROUTER_API_KEY to be set.`,
-	Example: "  snapd-repro-lp exec 2137543",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		bugID, err := parseBugRef(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid bug reference: %w", err)
-		}
-
-		baseDir := outputDir
-		if baseDir == "" {
-			baseDir = "."
-		}
-		bugDir := filepath.Join(baseDir, fmt.Sprintf("bug-%s", bugID))
-		planFile := filepath.Join(bugDir, "plan.json")
-
-		out := cmd.OutOrStdout()
-		_, _ = fmt.Fprintf(out, "%s Loading plan for bug #%s...\n", boldCyan("Step 1/3:"), bugID)
-
-		plan, err := LoadPlan(planFile)
-		if err != nil {
-			return fmt.Errorf("loading plan: %w (run 'snapd-repro-lp plan %s' first)", err, bugID)
-		}
-
-		_, _ = fmt.Fprintf(out, "  %s\n", plan.Title)
-		_, _ = fmt.Fprintf(out, "  Ubuntu version: %s\n", plan.UbuntuVersion)
-		_, _ = fmt.Fprintf(out, "  Steps: %d\n", len(plan.Steps))
-
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer stop()
-
-		// Determine Ubuntu version: override flag takes precedence.
-		ubuntuVersion := plan.UbuntuVersion
-		if ubuntuOverride != "" {
-			_, _ = fmt.Fprintf(out, "  Overriding Ubuntu version: %s → %s\n", plan.UbuntuVersion, ubuntuOverride)
-			ubuntuVersion = ubuntuOverride
-		}
-
-		// Launch VM.
-		instance, err := launchVM(cmd, ubuntuVersion, 2, 3)
-		if err != nil {
-			return err
-		}
-		defer cleanupVM(cmd, instance)
-
-		resolveModel()
-		_, _ = fmt.Fprintf(out, "\n%s Executing plan (model: %s)...\n", boldCyan("Step 3/3:"), modelName)
-
-		result, usage, execLog, err := runExecutionAgent(ctx, cmd, plan, bugDir, instance)
-		saveAgentLog(cmd, execLog, filepath.Join(bugDir, "execution-log.txt"))
+		result, usage, agentLog, err := runReproduceAgent(ctx, cmd, bug, bugDir, instanceRef)
+		saveAgentLog(cmd, agentLog, filepath.Join(bugDir, "reproduce-log.txt"))
 		if err != nil {
 			return err
 		}
@@ -496,132 +367,15 @@ Requires OPENROUTER_API_KEY to be set.`,
 	},
 }
 
-// --- reproduce command (convenience: plan + exec) ---
-
-var reproduceCmd = &cobra.Command{
-	Use:   "reproduce [bug-ref]",
-	Short: "Plan and execute a bug reproducer in one step",
-	Long: `Fetch a Launchpad bug report, analyze it to produce a reproduction plan,
-then execute the plan in an LXD container. This combines the plan and exec
-commands into a single step.
-
-Requires OPENROUTER_API_KEY to be set.`,
-	Example: "  snapd-repro-lp reproduce 1662786",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		bug, bugDir, err := fetchAndPrepareBug(cmd, args[0], 1, 4)
-		if err != nil {
-			return err
-		}
-
-		apiKey := os.Getenv("OPENROUTER_API_KEY")
-		if apiKey == "" {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nSet OPENROUTER_API_KEY to enable AI-assisted reproduction.\n")
-			return nil
-		}
-
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer stop()
-
-		out := cmd.OutOrStdout()
-
-		// Launch a default VM for investigation during planning.
-		instance, err := launchVM(cmd, defaultUbuntuVersion, 2, 4)
-		if err != nil {
-			return err
-		}
-		// Ensure cleanup even if we relaunch below.
-		defer func() {
-			cleanupVM(cmd, instance)
-		}()
-
-		// Phase 1: Plan.
-		resolveModel()
-		_, _ = fmt.Fprintf(out, "\n%s Planning reproduction (model: %s)...\n", boldCyan("Step 3/4:"), modelName)
-
-		plan, planUsage, planLog, err := runPlanningAgent(ctx, cmd, bug, bugDir, instance)
-		saveAgentLog(cmd, planLog, filepath.Join(bugDir, "planning-log.txt"))
-		if err != nil {
-			return err
-		}
-
-		// Save plan.
-		planFile := filepath.Join(bugDir, "plan.json")
-		if err := SavePlan(plan, planFile); err != nil {
-			return fmt.Errorf("saving plan: %w", err)
-		}
-		_, _ = fmt.Fprintf(out, "  Saved plan to %s\n", blue(fileHyperlink(planFile)))
-
-		// Determine the execution Ubuntu version.
-		execVersion := plan.UbuntuVersion
-		if ubuntuOverride != "" {
-			_, _ = fmt.Fprintf(out, "  Overriding Ubuntu version: %s → %s\n", plan.UbuntuVersion, ubuntuOverride)
-			execVersion = ubuntuOverride
-		}
-
-		// If the plan requests a different version, relaunch the VM.
-		if execVersion != defaultUbuntuVersion {
-			_, _ = fmt.Fprintf(out, "  Plan requires ubuntu:%s, relaunching VM...\n", execVersion)
-			cleanupVM(cmd, instance)
-			newInstance := NewLXDManager()
-			_, _ = fmt.Fprintf(out, "  Launching VM %s (ubuntu:%s)...\n", newInstance.Name(), execVersion)
-			if err := newInstance.Launch(execVersion, "vm"); err != nil {
-				return fmt.Errorf("relaunching VM: %w", err)
-			}
-			instance = newInstance
-		}
-
-		// Phase 2: Execute.
-		_, _ = fmt.Fprintf(out, "\n%s Executing plan (model: %s)...\n", boldCyan("Step 4/4:"), modelName)
-
-		result, execUsage, execLog, err := runExecutionAgent(ctx, cmd, plan, bugDir, instance)
-		saveAgentLog(cmd, execLog, filepath.Join(bugDir, "execution-log.txt"))
-		if err != nil {
-			return err
-		}
-
-		saveExecutionResult(cmd, result, bugDir)
-
-		// Combined token usage.
-		var totalUsage Usage
-		if planUsage != nil {
-			totalUsage.PromptTokens += planUsage.PromptTokens
-			totalUsage.CompletionTokens += planUsage.CompletionTokens
-			totalUsage.TotalTokens += planUsage.TotalTokens
-		}
-		if execUsage != nil {
-			totalUsage.PromptTokens += execUsage.PromptTokens
-			totalUsage.CompletionTokens += execUsage.CompletionTokens
-			totalUsage.TotalTokens += execUsage.TotalTokens
-		}
-		_, _ = fmt.Fprintf(out, "\n%s\n",
-			dim(fmt.Sprintf("Token usage: %d prompt + %d completion = %d total",
-				totalUsage.PromptTokens, totalUsage.CompletionTokens, totalUsage.TotalTokens)))
-
-		return nil
-	},
-}
-
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
 	rootCmd.PersistentFlags().StringVar(&modelName, "model", "", "LLM model to use via OpenRouter (env: OPENROUTER_MODEL)")
 	rootCmd.PersistentFlags().IntVar(&maxIterations, "max-iter", 60, "maximum agent iterations")
 
-	// plan command flags.
-	planCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "directory to write output (default: current directory)")
-	planCmd.Flags().BoolVarP(&forceOverwrite, "force", "f", false, "overwrite existing bug directory without prompting")
-
-	// exec command flags.
-	execCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "directory containing bug output (default: current directory)")
-	execCmd.Flags().StringVar(&ubuntuOverride, "ubuntu", "", "override the Ubuntu version from the plan (e.g. 22.04)")
-
-	// reproduce command flags (combines plan + exec).
+	// reproduce command flags.
 	reproduceCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "directory to write output (default: current directory)")
 	reproduceCmd.Flags().BoolVarP(&forceOverwrite, "force", "f", false, "overwrite existing bug directory without prompting")
-	reproduceCmd.Flags().StringVar(&ubuntuOverride, "ubuntu", "", "override the Ubuntu version from the plan (e.g. 22.04)")
 
-	rootCmd.AddCommand(planCmd)
-	rootCmd.AddCommand(execCmd)
 	rootCmd.AddCommand(reproduceCmd)
 }
 

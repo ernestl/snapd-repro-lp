@@ -167,3 +167,17 @@ func TestModelDefault(t *testing.T) {
 		t.Errorf("model = %q, want %q", modelName, "deepseek/deepseek-v4-pro")
 	}
 }
+
+func TestReproduceCommandHelp(t *testing.T) {
+	out, err := executeCommand("reproduce", "--help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Contains([]byte(out), []byte("single agent session")) {
+		t.Error("reproduce --help should mention single agent session")
+	}
+	// Should not mention plan.json.
+	if bytes.Contains([]byte(out), []byte("plan.json")) {
+		t.Error("reproduce --help should not mention plan.json")
+	}
+}

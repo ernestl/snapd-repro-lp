@@ -326,6 +326,12 @@ func TestWriteSkillIndex(t *testing.T) {
 	if !strings.Contains(output, "Available Skills") {
 		t.Error("missing header")
 	}
+	if !strings.Contains(output, "review these before investigating") {
+		t.Error("skill index header should emphasize reviewing before investigating")
+	}
+	if !strings.Contains(output, "expert debugging commands") {
+		t.Error("skill index should explain what skills contain")
+	}
 	if !strings.Contains(output, "snap-refresh") {
 		t.Error("missing snap-refresh")
 	}
@@ -345,7 +351,7 @@ func TestWriteSkillIndexNil(t *testing.T) {
 
 // --- Integration: prompt with skills ---
 
-func TestBuildPlanningPromptWithSkills(t *testing.T) {
+func TestBuildReproducePromptWithSkills(t *testing.T) {
 	idx, _ := NewSkillIndex(testSkillsJSON, testSkillFS())
 	bug := &Bug{
 		ID:          12345,
@@ -353,7 +359,7 @@ func TestBuildPlanningPromptWithSkills(t *testing.T) {
 		Description: "Refresh hangs.",
 	}
 
-	prompt := BuildPlanningPrompt(bug, "test-instance", idx)
+	prompt := BuildReproducePrompt(bug, "test-instance", idx)
 
 	checks := []string{
 		"Available Skills",
@@ -364,33 +370,7 @@ func TestBuildPlanningPromptWithSkills(t *testing.T) {
 	}
 	for _, check := range checks {
 		if !strings.Contains(prompt, check) {
-			t.Errorf("planning prompt missing %q", check)
-		}
-	}
-}
-
-func TestBuildExecutionPromptWithSkills(t *testing.T) {
-	idx, _ := NewSkillIndex(testSkillsJSON, testSkillFS())
-	plan := &ReproPlan{
-		BugID:          12345,
-		Title:          "snap refresh issue",
-		UbuntuVersion:  "24.04",
-		Steps:          []PlanStep{{Description: "test", Command: "echo hi"}},
-		ExpectedResult: "something",
-	}
-
-	prompt := BuildExecutionPrompt(plan, "test-container", idx)
-
-	checks := []string{
-		"Available Skills",
-		"snap-refresh",
-		"journalctl",
-		"describe_skill",
-		"load_skill",
-	}
-	for _, check := range checks {
-		if !strings.Contains(prompt, check) {
-			t.Errorf("execution prompt missing %q", check)
+			t.Errorf("reproduce prompt missing %q", check)
 		}
 	}
 }

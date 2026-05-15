@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,7 +21,7 @@ type ToolResult struct {
 	// report_result).
 	StopAgent bool
 	// StopMessage is an optional human-readable message displayed
-	// when StopAgent is true (e.g. "LLM reported plan").
+	// when StopAgent is true (e.g. "LLM reported result").
 	StopMessage string
 	// Summary is a concise description of what the tool did,
 	// displayed in the progress line (e.g. "apt-get update").
@@ -42,13 +43,21 @@ type Tool interface {
 
 // RunCommandTool executes shell commands inside an LXD instance.
 type RunCommandTool struct {
-	instance InstanceManager
+	ref *InstanceRef
 }
 
 // NewRunCommandTool creates a new run_command tool backed by the given
-// instance manager.
+// instance manager. The instance is wrapped in an InstanceRef so it
+// can be swapped at runtime (e.g. by RelaunchVMTool).
 func NewRunCommandTool(instance InstanceManager) *RunCommandTool {
-	return &RunCommandTool{instance: instance}
+	return &RunCommandTool{ref: &InstanceRef{Instance: instance}}
+}
+
+// NewRunCommandToolFromRef creates a new run_command tool backed by a
+// shared InstanceRef. Use this when the instance may be swapped at
+// runtime (e.g. by RelaunchVMTool).
+func NewRunCommandToolFromRef(ref *InstanceRef) *RunCommandTool {
+	return &RunCommandTool{ref: ref}
 }
 
 func (t *RunCommandTool) Name() string { return "run_command" }
@@ -87,7 +96,7 @@ func (t *RunCommandTool) Execute(ctx context.Context, argsJSON string) (*ToolRes
 		return &ToolResult{Output: "error: command is required"}, nil
 	}
 
-	result, err := t.instance.Exec(ctx, args.Command)
+	result, err := t.ref.Instance.Exec(ctx, args.Command)
 	if err != nil {
 		return nil, fmt.Errorf("executing command: %w", err)
 	}
@@ -357,121 +366,101 @@ func (t *ReadFileTool) Execute(_ context.Context, argsJSON string) (*ToolResult,
 	return &ToolResult{Output: content, Summary: args.Path}, nil
 }
 
-// --- report_plan tool ---
+// --- InstanceRef: shared mutable instance reference ---
 
-// PlanStep describes a single step in a reproduction plan.
-type PlanStep struct {
-	Description string `json:"description"`
-	Command     string `json:"command"`
+// InstanceRef holds a mutable reference to the current InstanceManager.
+// It is shared between RunCommandTool and RelaunchVMTool so that when
+// the VM is relaunched, run_command automatically targets the new instance.
+type InstanceRef struct {
+	Instance InstanceManager
 }
 
-// ReproPlan holds the structured reproduction plan produced by the
-// planning LLM.
-type ReproPlan struct {
-	BugID               int        `json:"bug_id"`
-	Title               string     `json:"title"`
-	UbuntuVersion       string     `json:"ubuntu_version"`
-	InstanceType        string     `json:"instance_type"`
-	Steps               []PlanStep `json:"steps"`
-	ExpectedResult      string     `json:"expected_result"`
-	AttachmentsReviewed []string   `json:"attachments_reviewed"`
-	ModelUsed           string     `json:"model_used"`
+// --- relaunch_vm tool ---
+
+// VMFactory creates a new LXD manager. The caller is responsible for
+// launching and eventually deleting the returned instance.
+type VMFactory func() *LXDManager
+
+// RelaunchVMTool allows the LLM to relaunch the VM with a different
+// Ubuntu version mid-conversation. It deletes the current instance,
+// launches a new one, and updates the shared InstanceRef.
+type RelaunchVMTool struct {
+	ref       *InstanceRef
+	factory   VMFactory
+	output    io.Writer // for progress messages
+	onCleanup func(old InstanceManager) // optional callback after old instance is deleted
 }
 
-// ReportPlanTool allows the planning LLM to output a structured
-// reproduction plan, and stops the planning agent loop.
-type ReportPlanTool struct {
-	// Plan is populated after Execute is called.
-	Plan *ReproPlan
+// NewRelaunchVMTool creates a new relaunch_vm tool.
+func NewRelaunchVMTool(ref *InstanceRef, factory VMFactory, output io.Writer) *RelaunchVMTool {
+	return &RelaunchVMTool{
+		ref:     ref,
+		factory: factory,
+		output:  output,
+	}
 }
 
-// NewReportPlanTool creates a new report_plan tool.
-func NewReportPlanTool() *ReportPlanTool {
-	return &ReportPlanTool{}
-}
+func (t *RelaunchVMTool) Name() string { return "relaunch_vm" }
 
-func (t *ReportPlanTool) Name() string { return "report_plan" }
-
-func (t *ReportPlanTool) Definition() ToolDef {
+func (t *RelaunchVMTool) Definition() ToolDef {
 	return ToolDef{
 		Type: "function",
 		Function: ToolSchema{
-			Name:        "report_plan",
-			Description: "Output the structured reproduction plan. Call this after you have analyzed the bug report and any attachments. This ends the planning session.",
+			Name:        "relaunch_vm",
+			Description: "Relaunch the LXD VM with a different Ubuntu version. Use this when the bug requires a specific Ubuntu version that differs from the current one (24.04). The current VM is deleted and a new one is launched. All previous state inside the VM is lost.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"instance_type": map[string]interface{}{
-						"type":        "string",
-						"enum":        []string{"vm", "container"},
-						"description": "LXD instance type. Use 'vm' (default) for most bugs. Use 'container' only when the bug is specifically about behavior inside a container — then the plan should include steps to launch a nested container inside the VM.",
-					},
 					"ubuntu_version": map[string]interface{}{
 						"type":        "string",
-						"description": "The Ubuntu version to use for reproduction (e.g. '24.04', '22.04').",
-					},
-					"steps": map[string]interface{}{
-						"type": "array",
-						"items": map[string]interface{}{
-							"type": "object",
-							"properties": map[string]interface{}{
-								"description": map[string]interface{}{
-									"type":        "string",
-									"description": "What this step does and why.",
-								},
-								"command": map[string]interface{}{
-									"type":        "string",
-									"description": "The shell command to execute.",
-								},
-							},
-							"required": []string{"description", "command"},
-						},
-						"description": "Ordered list of steps to reproduce the bug.",
-					},
-					"expected_result": map[string]interface{}{
-						"type":        "string",
-						"description": "What the expected outcome looks like when the bug is reproduced.",
-					},
-					"attachments_reviewed": map[string]interface{}{
-						"type":        "array",
-						"items":       map[string]interface{}{"type": "string"},
-						"description": "List of attachment filenames that were read during planning.",
+						"description": "The Ubuntu version to launch (e.g. '22.04', '20.04', '24.04').",
 					},
 				},
-				"required":             []string{"ubuntu_version", "steps", "expected_result"},
+				"required":             []string{"ubuntu_version"},
 				"additionalProperties": false,
 			},
 		},
 	}
 }
 
-type reportPlanArgs struct {
-	InstanceType        string     `json:"instance_type"`
-	UbuntuVersion       string     `json:"ubuntu_version"`
-	Steps               []PlanStep `json:"steps"`
-	ExpectedResult      string     `json:"expected_result"`
-	AttachmentsReviewed []string   `json:"attachments_reviewed"`
+type relaunchVMArgs struct {
+	UbuntuVersion string `json:"ubuntu_version"`
 }
 
-func (t *ReportPlanTool) Execute(_ context.Context, argsJSON string) (*ToolResult, error) {
-	var args reportPlanArgs
+func (t *RelaunchVMTool) Execute(ctx context.Context, argsJSON string) (*ToolResult, error) {
+	var args relaunchVMArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return nil, fmt.Errorf("parsing report_plan args: %w", err)
+		return nil, fmt.Errorf("parsing relaunch_vm args: %w", err)
+	}
+	if args.UbuntuVersion == "" {
+		return &ToolResult{Output: "error: ubuntu_version is required"}, nil
 	}
 
-	t.Plan = &ReproPlan{
-		InstanceType:        args.InstanceType,
-		UbuntuVersion:       args.UbuntuVersion,
-		Steps:               args.Steps,
-		ExpectedResult:      args.ExpectedResult,
-		AttachmentsReviewed: args.AttachmentsReviewed,
+	// Delete the current instance.
+	old := t.ref.Instance
+	oldName := old.Name()
+	_, _ = fmt.Fprintf(t.output, "  Deleting VM %s...\n", oldName)
+	if err := old.Delete(); err != nil {
+		return &ToolResult{Output: fmt.Sprintf("error: failed to delete current VM: %v", err)}, nil
 	}
 
-	return &ToolResult{
-		Output:      "Plan recorded. Planning session ending.",
-		StopAgent:   true,
-		StopMessage: "LLM reported plan",
-	}, nil
+	if t.onCleanup != nil {
+		t.onCleanup(old)
+	}
+
+	// Launch a new instance.
+	newManager := t.factory()
+	_, _ = fmt.Fprintf(t.output, "  Launching VM %s (ubuntu:%s)...\n", newManager.Name(), args.UbuntuVersion)
+	if err := newManager.LaunchCached(args.UbuntuVersion, "vm"); err != nil {
+		return &ToolResult{Output: fmt.Sprintf("error: failed to launch new VM: %v", err)}, nil
+	}
+
+	// Update the shared reference.
+	t.ref.Instance = newManager
+
+	summary := fmt.Sprintf("ubuntu:%s → %s", args.UbuntuVersion, newManager.Name())
+	output := fmt.Sprintf("VM relaunched successfully.\nNew instance: %s\nUbuntu version: %s\nAll previous VM state has been reset.", newManager.Name(), args.UbuntuVersion)
+	return &ToolResult{Output: output, Summary: summary}, nil
 }
 
 // --- ToolExecutor ---

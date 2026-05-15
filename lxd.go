@@ -201,6 +201,211 @@ func (m *LXDManager) waitForNetwork(timeout time.Duration, instanceType string) 
 	return fmt.Errorf("timeout waiting for network in %s %s", kind, m.name)
 }
 
+// --- VM snapshot cache ---
+//
+// To avoid the full boot + cloud-init + snap-seeding wait on every run,
+// we maintain "golden" base VMs with a snapshot of the fully-initialised
+// state. On cache hit we copy from the snapshot and start; on cache miss
+// we create the golden VM first.
+
+const goldenSnapshotName = "ready"
+
+// goldenVMName returns the name of the golden base VM for a given
+// Ubuntu version, e.g. "snapd-repro-base-2404" for version "24.04".
+func goldenVMName(version string) string {
+	return "snapd-repro-base-" + strings.ReplaceAll(version, ".", "")
+}
+
+// goldenVMExists checks whether an LXD instance with the given name
+// exists by listing all instance names.
+func (m *LXDManager) goldenVMExists(name string) (bool, error) {
+	cmd := m.execCommand(context.Background(), "lxc", "list", "--format=csv", "-c", "n")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return false, fmt.Errorf("lxc list: %w", err)
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.TrimSpace(line) == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// waitForCloudInit waits for cloud-init to finish inside the instance.
+func (m *LXDManager) waitForCloudInit(ctx context.Context, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := m.Exec(ctx, "cloud-init status --wait")
+	if err != nil {
+		return fmt.Errorf("waiting for cloud-init: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("cloud-init failed (exit %d): %s", result.ExitCode, result.Output)
+	}
+	return nil
+}
+
+// waitForSnapSeeding waits for snap seeding to complete inside the
+// instance.
+func (m *LXDManager) waitForSnapSeeding(ctx context.Context, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := m.Exec(ctx, "snap wait system seed.loaded")
+	if err != nil {
+		return fmt.Errorf("waiting for snap seeding: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("snap seeding failed (exit %d): %s", result.ExitCode, result.Output)
+	}
+	return nil
+}
+
+// stop gracefully stops the instance.
+func (m *LXDManager) stop() error {
+	cmd := m.execCommand(context.Background(), "lxc", "stop", m.name)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("lxc stop: %s", msg)
+		}
+		return fmt.Errorf("lxc stop: %w", err)
+	}
+	m.running = false
+	return nil
+}
+
+// snapshotInstance creates a snapshot of this instance with the given
+// name.
+func (m *LXDManager) snapshotInstance(snapName string) error {
+	cmd := m.execCommand(context.Background(), "lxc", "snapshot", m.name, snapName)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("lxc snapshot: %s", msg)
+		}
+		return fmt.Errorf("lxc snapshot: %w", err)
+	}
+	return nil
+}
+
+// copyFromSnapshot creates this instance as a copy of
+// <instance>/<snapshot>.
+func (m *LXDManager) copyFromSnapshot(instance, snapName string) error {
+	source := instance + "/" + snapName
+	cmd := m.execCommand(context.Background(), "lxc", "copy", source, m.name)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("lxc copy: %s", msg)
+		}
+		return fmt.Errorf("lxc copy: %w", err)
+	}
+	return nil
+}
+
+// startInstance starts a stopped or copied instance.
+func (m *LXDManager) startInstance() error {
+	cmd := m.execCommand(context.Background(), "lxc", "start", m.name)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("lxc start: %s", msg)
+		}
+		return fmt.Errorf("lxc start: %w", err)
+	}
+	return nil
+}
+
+// ensureGoldenVM creates a fully-initialised golden VM for the given
+// version if one does not already exist. The golden VM is launched,
+// booted until cloud-init and snap seeding complete, stopped, and then
+// a snapshot named "ready" is taken.
+func (m *LXDManager) ensureGoldenVM(goldenName, image, instanceType string) error {
+	golden := &LXDManager{name: goldenName, execCommand: m.execCommand}
+
+	if err := golden.Launch(image, instanceType); err != nil {
+		return fmt.Errorf("launching golden VM: %w", err)
+	}
+
+	ctx := context.Background()
+	if err := golden.waitForCloudInit(ctx, 5*time.Minute); err != nil {
+		_ = golden.Delete()
+		return fmt.Errorf("golden VM cloud-init: %w", err)
+	}
+	if err := golden.waitForSnapSeeding(ctx, 5*time.Minute); err != nil {
+		_ = golden.Delete()
+		return fmt.Errorf("golden VM snap seeding: %w", err)
+	}
+
+	if err := golden.stop(); err != nil {
+		_ = golden.Delete()
+		return fmt.Errorf("stopping golden VM: %w", err)
+	}
+
+	if err := golden.snapshotInstance(goldenSnapshotName); err != nil {
+		_ = golden.Delete()
+		return fmt.Errorf("snapshotting golden VM: %w", err)
+	}
+
+	return nil
+}
+
+// LaunchCached creates and starts an LXD instance using a cached golden
+// VM snapshot when available. On cache hit the instance is copied from
+// the snapshot and started; on cache miss a golden VM is created first.
+// If any cache operation fails, it falls back to a normal Launch.
+func (m *LXDManager) LaunchCached(image string, instanceType string) error {
+	if m.running {
+		return fmt.Errorf("instance %s is already running", m.name)
+	}
+
+	golden := goldenVMName(image)
+
+	// Check whether the golden VM exists.
+	exists, err := m.goldenVMExists(golden)
+	if err != nil {
+		// Cannot check — fall back to normal launch.
+		return m.Launch(image, instanceType)
+	}
+
+	// Create the golden VM if it does not exist.
+	if !exists {
+		if err := m.ensureGoldenVM(golden, image, instanceType); err != nil {
+			return m.Launch(image, instanceType)
+		}
+	}
+
+	// Copy from the golden snapshot.
+	if err := m.copyFromSnapshot(golden, goldenSnapshotName); err != nil {
+		return m.Launch(image, instanceType)
+	}
+
+	// Start the copied instance and wait for network.
+	if err := m.startInstance(); err != nil {
+		_ = m.Delete()
+		return m.Launch(image, instanceType)
+	}
+
+	timeout := 30 * time.Second
+	if instanceType == "vm" {
+		timeout = 120 * time.Second
+	}
+	if err := m.waitForNetwork(timeout, instanceType); err != nil {
+		_ = m.Delete()
+		return err
+	}
+
+	m.running = true
+	return nil
+}
+
 // generateContainerName returns a name like "snapd-repro-a1b2c3".
 func generateContainerName() string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"

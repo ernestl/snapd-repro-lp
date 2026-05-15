@@ -53,6 +53,12 @@
       "keywords": ["error", "source", "code", "grep", "message", "cannot", "build", "debug", "SNAPD_DEBUG"],
       "summary": "Techniques for tracing through the snapd Go source code to find code paths relevant to a bug, including intelligent error message searching (static vs dynamic parts), building and instrumenting snapd locally, and enabling debug/HTTP logging.",
       "content_file": "skills/snapd-code-tracing.md"
+    },
+    {
+      "name": "snap-confine",
+      "keywords": ["confine", "snap-confine", "apparmor", "profile", "sandbox", "mount-namespace", "confinement", "boot", "snapd-apparmor"],
+      "summary": "Understanding snap-confine execution, AppArmor profile lifecycle, boot-time profile loading service ordering, and how to navigate the confinement source code.",
+      "content_file": "skills/snap-confine.md"
     }
   ]
 }

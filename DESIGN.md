@@ -5,38 +5,30 @@ analyze them, and automatically attempts to reproduce the bug in an LXD VM.
 
 ## Architecture
 
-The tool uses a **two-phase approach**: a planning phase that analyzes the bug
-and produces a structured plan, followed by an execution phase that carries out
-the plan inside an LXD VM. The phases are independent -- you can run them
-separately or together.
+The tool uses a **single-phase approach**: a single agent session receives the
+full bug context, analyzes the bug, and attempts reproduction inside an LXD VM.
+The LLM can investigate the environment, load domain-specific skills, determine
+the correct Ubuntu version (relaunching the VM if needed), and execute
+reproduction commands — all in one conversation.
 
-LXD VM lifecycle is **host-controlled** -- the LLM never creates or destroys
-instances. A VM is launched before the LLM runs, and cleaned up after. This is
-a deliberate security boundary: the LLM can only execute commands inside an
-already-running VM via `run_command`.
+LXD VM lifecycle is **host-controlled** — the LLM never creates or destroys
+instances directly. A VM is launched before the LLM runs, and cleaned up after.
+The LLM can request a VM relaunch with a different Ubuntu version via the
+`relaunch_vm` tool, but the host manages the actual lifecycle. This is a
+deliberate security boundary.
 
 ```
-plan                    exec                    reproduce
- |                       |                       |
- v                       v                       v
- Fetch bug               Load plan.json          Fetch bug
- Launch default VM       Launch VM (plan ver.)   Launch default VM
- Analyze w/ LLM          Run plan w/ LLM         Analyze w/ LLM  (plan)
- Write plan.json         Write result.json       Write plan.json
- Delete VM               Write reproducer.sh     Relaunch VM if needed
-                         Delete VM               Run plan w/ LLM (exec)
-                                                 Write results
-                                                 Delete VM
+reproduce
+ |
+ v
+ Fetch bug
+ Launch default VM (24.04)
+ Analyze + reproduce w/ LLM (single session)
+   - LLM can call relaunch_vm to switch Ubuntu version
+   - LLM investigates, reproduces, adapts
+ Write result.json + reproducer.sh
+ Delete VM
 ```
-
-### Why two phases?
-
-- **Inspectable plans**: The plan is saved as `plan.json` -- you can review,
-  edit, or replay it before spending LXD resources.
-- **Different models**: You can use a cheaper/faster model for planning and a
-  more capable one for execution.
-- **Debuggability**: If execution fails, you can re-run `exec` against the same
-  plan without re-fetching and re-analyzing the bug.
 
 ### VM-first design
 
@@ -45,10 +37,10 @@ provide full systemd, support all snaps, and allow nested LXD. If the bug
 specifically requires a container, the LLM can launch one inside the VM using
 nested LXD.
 
-A default VM (Ubuntu 24.04) is launched before planning so the planning agent
-can investigate the environment (check package versions, inspect attached state
-files, test hypotheses). If the plan specifies a different Ubuntu version, the
-VM is deleted and a new one is launched before execution.
+A default VM (Ubuntu 24.04) is launched before the agent runs so it can
+investigate the environment (check package versions, inspect attached state
+files, test hypotheses). The LLM can call `relaunch_vm` to switch to a
+different Ubuntu version mid-conversation.
 
 ## Components
 
@@ -84,7 +76,7 @@ than a hard error. This ensures `result.json` is always produced.
 
 The caller creates the appropriate tools, wires them into a `ToolExecutor`, and
 inspects the specific tool for structured output after the agent returns (e.g.,
-`reportPlan.Plan` or `reportResult.Result`).
+`reportResult.Result`).
 
 **Agent output** uses a consistent colour scheme:
 - Cyan: all LLM-initiated actions (tool calls, stop messages, text responses)
@@ -94,7 +86,7 @@ inspects the specific tool for structured output after the agent returns (e.g.,
 
 Non-stop tools display a summary after execution (e.g.
 `run_command: apt-get update`). Stop tools display a human-readable message
-(e.g. `LLM reported plan`). In verbose mode (`-v`), the full tool request JSON
+(e.g. `LLM reported result`). In verbose mode (`-v`), the full tool request JSON
 and output are printed after each tool call.
 
 ### Tool System (`tools.go`)
@@ -107,76 +99,113 @@ registered with a `ToolExecutor` that dispatches by name.
 - `Summary`: concise description for the progress line (e.g. the command string
   for `run_command`, the filename for `read_file`)
 
-**Planning phase tools:**
-- `run_command` -- Execute a shell command inside the LXD VM for investigation
-  (checking versions, inspecting state, testing commands).
+**Tools:**
+- `run_command` -- Execute a shell command inside the LXD VM. Backed by a shared
+  `InstanceRef` so that when `relaunch_vm` swaps the VM, `run_command`
+  automatically targets the new instance. Output larger than 50KB is truncated.
 - `read_file` -- Read a file or list a directory within `bug-<id>/attachments/`.
   Sandboxed: path traversal outside the attachments directory is rejected.
   Directories are listed with their entries; files larger than 100KB are truncated.
-- `report_plan` -- Submit a structured reproduction plan (`ReproPlan`). Sets
-  `StopAgent: true`.
-- `describe_skill` / `load_skill` -- Browse and load domain-specific skill
-  documents (e.g. snap testing patterns) that get injected into the conversation.
-
-**Execution phase tools:**
-- `run_command` -- Execute a shell command in the LXD VM via
-  `InstanceManager.Exec()`. Output larger than 50KB is truncated.
+- `relaunch_vm` -- Delete the current VM and launch a new one with a different
+  Ubuntu version. Updates the shared `InstanceRef` so `run_command` targets the
+  new VM. The host provides a `VMFactory` function that creates new `LXDManager`
+  instances.
 - `report_result` -- Submit the reproduction result (`ReproResult`: reproduced
   bool, explanation, script). Sets `StopAgent: true`.
-- `describe_skill` / `load_skill` -- Same skill tools as the planning phase.
+- `describe_skill` / `load_skill` -- Browse and load domain-specific skill
+  documents (e.g. snap testing patterns) that get injected into the conversation.
+- `query_snapd_revisions` -- Query the snapd snap revision-to-version mapping
+  by date range, architecture, revision number, or version string.
+
+**Shared mutable instance reference (`InstanceRef`):**
+- `RunCommandTool` and `RelaunchVMTool` share an `InstanceRef` pointer. When
+  `relaunch_vm` swaps the VM, `run_command` automatically targets the new
+  instance without needing to be reconfigured.
 
 ### LXD Manager (`lxd.go`)
 
 Manages LXD instance lifecycle by shelling out to `lxc`:
 - `NewLXDManager()` generates a unique instance name (`snapd-repro-<random>`).
 - `Launch(version, instanceType)` runs `lxc launch ubuntu:<version> <name> [--vm]`.
+- `LaunchCached(version, instanceType)` launches from a cached golden VM snapshot
+  when available, falling back to `Launch()` if any cache step fails.
 - `Exec(command)` runs `lxc exec <name> -- bash -c "<command>"`.
 - `Delete()` runs `lxc delete --force <name>`.
 
 The `InstanceManager` interface allows substituting a mock for testing.
 
+### VM Snapshot Cache (`lxd.go`)
+
+To avoid the full boot + cloud-init + snap-seeding wait on every run, the LXD
+manager maintains "golden" base VMs with an LXD snapshot of the
+fully-initialised state. Both initial VM launch and `relaunch_vm` use the cache
+via `LaunchCached()`.
+
+**Golden VMs** are named `snapd-repro-base-<version>` (e.g.
+`snapd-repro-base-2404`). Each golden VM has a snapshot named `ready` that
+captures the state after network, cloud-init, and snap seeding have completed.
+
+**Cache miss (first use of a version):**
+
+```
+lxc launch ubuntu:24.04 snapd-repro-base-2404 --vm
+  waitForNetwork
+  cloud-init status --wait
+  snap wait system seed.loaded
+lxc stop snapd-repro-base-2404
+lxc snapshot snapd-repro-base-2404 ready
+lxc copy snapd-repro-base-2404/ready snapd-repro-<work>
+lxc start snapd-repro-<work>
+  waitForNetwork (fast — cloud-init already done)
+```
+
+**Cache hit (subsequent uses):**
+
+```
+lxc copy snapd-repro-base-2404/ready snapd-repro-<work>
+lxc start snapd-repro-<work>
+  waitForNetwork (fast)
+```
+
+**Fallback:** if any cache operation fails (existence check, golden creation,
+copy, or start), `LaunchCached()` falls back to a normal `Launch()` so the tool
+always works even if caching has issues.
+
 ### Prompts (`prompt.go`)
 
-Builds system and user prompts for each phase:
-- **Planning prompt**: Includes the full bug report (description, messages,
-  attachment list), Ubuntu codename-to-version mapping, VM instance name, and
-  instructions to investigate using `run_command` and produce a `ReproPlan` via
-  `report_plan`.
-- **Execution prompt**: Includes the plan steps, VM instance name, Ubuntu
-  version, and instructions to follow the plan adaptively and report via
-  `report_result`.
+Builds the system and user prompts for the reproduce agent. The reproduce prompt
+includes the full bug report (description, messages, attachment list), Ubuntu
+codename-to-version mapping, VM instance name, skills index, snapd domain
+knowledge, reproduction methodology, incremental approach guidance, and
+troubleshooting/adaptation instructions. The LLM is expected to analyze the
+bug, load relevant skills, determine the correct Ubuntu version (using
+`relaunch_vm` if needed), investigate, and reproduce — all in one session.
 
 `UbuntuCodenames` maps release codenames (noble, jammy, focal, etc.) to version
-numbers so the planning LLM can determine the right Ubuntu version from bug tags.
-
-`SavePlan`/`LoadPlan` handle JSON serialization of `ReproPlan`.
+numbers so the LLM can determine the right Ubuntu version from bug tags.
 
 ### Prompt HTML Output (`htmloutput.go`)
 
 Each agent run saves its full system prompt and user message as a self-contained
-HTML file (`planning-prompt.html`, `execution-prompt.html`) for debugging.
+HTML file (`reproduce-prompt.html`) for debugging.
 Always written regardless of `--verbose`.
 
 ### Skills System (`skills.go`)
 
 An embedded library of domain-specific knowledge documents (e.g. snap testing
 patterns, LXD usage). Skills are indexed in `skills.json` and stored as markdown
-files under `skills/`. Both phases expose `describe_skill` (list available
+files under `skills/`. The agent exposes `describe_skill` (list available
 skills) and `load_skill` (inject a skill's content into the conversation) tools
 so the LLM can pull in relevant knowledge on demand.
 
 ## CLI Commands
 
 ```
-snapd-repro-lp plan <bug-ref>           # Fetch + launch VM + analyze, write plan.json
-snapd-repro-lp exec <bug-ref>           # Load plan, launch VM, run in LXD VM
-snapd-repro-lp reproduce <bug-ref>      # plan + exec in one step
+snapd-repro-lp reproduce <bug-ref>      # Fetch + analyze + reproduce in one step
 ```
 
 **Global flags:** `--model`, `--max-iter`, `--verbose`
-**Plan flags:** `--output-dir`/`-o`, `--force`/`-f`
-**Exec flags:** `--output-dir`/`-o`, `--ubuntu` (override version from plan)
-**Reproduce flags:** `--output-dir`/`-o`, `--force`/`-f`, `--ubuntu`
+**Reproduce flags:** `--output-dir`/`-o`, `--force`/`-f`
 
 ## Data Flow
 
@@ -188,10 +217,9 @@ bug-<id>/
    +-- bug-<id>.json            (bug metadata + messages)
    +-- attachments/
    |   +-- <files>...           (downloaded attachments)
-   +-- planning-prompt.html     (planning prompt for inspection)
-   +-- plan.json                (from planning phase)
-   +-- execution-prompt.html    (execution prompt for inspection)
-   +-- result.json              (from execution phase)
+   +-- reproduce-prompt.html    (reproduce prompt for inspection)
+   +-- reproduce-log.txt        (agent interaction log)
+   +-- result.json              (reproduction result)
    +-- reproducer.sh            (extracted script)
 ```
 
@@ -204,28 +232,36 @@ bug-<id>/
 
 ## Key Design Decisions
 
+- **Single-phase agent** -- the `reproduce` command runs one agent session that
+  both analyzes and reproduces the bug. The LLM maintains full context across
+  investigation and reproduction in a single conversation.
 - **No agent SDK** -- raw HTTP to OpenRouter. Keeps dependencies minimal and
   the tool call loop simple to debug.
 - **Agent is tool-agnostic** -- `NewAgent` takes an `LLMClient` and
   `ToolExecutor`, not specific tool types. Any tool can stop the loop by setting
   `StopAgent: true`. The caller reads structured output from the tool directly.
 - **Host-controlled VM lifecycle** -- the LLM never creates or deletes LXD
-  instances. VMs are launched and cleaned up by the host code. The LLM only gets
-  `run_command` to execute commands inside an existing VM. This is a deliberate
-  security boundary.
+  instances directly. VMs are launched and cleaned up by the host code. The LLM
+  can request a version change via `relaunch_vm`, but the host manages the
+  actual lifecycle through the `VMFactory` pattern.
 - **VM-first, always** -- all reproduction uses VMs (not containers). VMs
   support full systemd, all snaps, and nested LXD. If a container is needed,
   the LLM launches one inside the VM.
-- **Planning agent has VM access** -- the planning agent can run commands inside
-  the VM to investigate (check versions, inspect state files, test hypotheses)
-  before producing a plan. This leads to better-informed plans.
-- **`read_file` is sandboxed to `attachments/`** -- the planning LLM can only
+- **Shared mutable instance reference** -- `RunCommandTool` and
+  `RelaunchVMTool` share an `InstanceRef` pointer so that when `relaunch_vm`
+  swaps the VM, `run_command` automatically targets the new instance.
+- **`read_file` is sandboxed to `attachments/`** -- the LLM can only
   read files within `bug-<id>/attachments/`. The bug JSON and runtime artifacts
   in the `bug-<id>/` root are not visible to the LLM. Path escape attempts are
   rejected.
 - **LXD via CLI, not API** -- shelling out to `lxc` is simpler and avoids the
   LXD Go client dependency. The `InstanceManager` interface keeps it testable.
-- **Ubuntu version from LLM** -- the planning LLM infers the Ubuntu version from
+- **Ubuntu version from LLM** -- the LLM infers the Ubuntu version from
   bug tags/description using the codename mapping. A default VM (24.04) is used
-  for planning; if the plan requests a different version, the VM is relaunched
-  before execution. `--ubuntu` on `exec` is an optional override.
+  initially; the LLM can call `relaunch_vm` to switch to a different version.
+- **VM snapshot cache** -- golden base VMs are maintained per Ubuntu version
+  with an LXD snapshot of the fully-initialised state (network + cloud-init +
+  snap seeding). `LaunchCached()` copies from the snapshot and starts the copy,
+  avoiding the full initialisation wait on cache hits. On cache miss the golden
+  VM is created on first use. All cache operations fall back to a normal launch
+  on failure.

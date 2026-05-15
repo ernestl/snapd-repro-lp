@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -33,7 +31,6 @@ var UbuntuCodenames = map[string]string{
 }
 
 // writeBugReport appends the bug report details to a string builder.
-// This is shared between the planning and execution prompts.
 func writeBugReport(b *strings.Builder, bug *Bug) {
 	b.WriteString("## Bug Report\n\n")
 	fmt.Fprintf(b, "**Bug ID:** %d\n", bug.ID)
@@ -101,7 +98,9 @@ func writeSkillIndex(b *strings.Builder, skills *SkillIndex) {
 	if skills == nil {
 		return
 	}
-	b.WriteString("## Available Skills (use describe_skill or load_skill for details)\n\n")
+	b.WriteString("## Available Skills (IMPORTANT: review these before investigating)\n\n")
+	b.WriteString("Skills contain expert debugging commands and workflows for specific snap/snapd problem domains.\n")
+	b.WriteString("Use describe_skill to check relevance, then load_skill on the most relevant ones before proceeding.\n\n")
 	b.WriteString(skills.List())
 	b.WriteString("\n")
 }
@@ -125,58 +124,101 @@ func writeSnapdKnowledge(b *strings.Builder) {
 `)
 }
 
-// --- Planning prompt ---
+// --- Single-phase reproduce prompt ---
 
-// BuildPlanningPrompt constructs the system prompt for the planning
-// phase. The planning LLM analyzes the bug report and attachments,
-// and can run commands inside a pre-launched VM to investigate.
-func BuildPlanningPrompt(bug *Bug, instanceName string, skills *SkillIndex) string {
+// BuildReproducePrompt constructs the system prompt for the single-phase
+// reproduce command. The LLM receives the full bug context and is
+// expected to analyze, investigate, and reproduce the bug in one session.
+func BuildReproducePrompt(bug *Bug, instanceName string, skills *SkillIndex) string {
 	var b strings.Builder
 
-	b.WriteString(`You are an expert Ubuntu/snapd bug analysis agent. Your goal is to analyze a Launchpad bug report and produce a structured plan to REPRODUCE THE ORIGINAL BUG.
+	b.WriteString(`You are an expert Ubuntu/snapd bug reproduction agent. Your goal is to analyze a Launchpad bug report and reproduce the ORIGINAL BUG inside an LXD VM.
 
 ## Environment
 - You have access to an LXD VM named "` + instanceName + `" running Ubuntu ` + defaultUbuntuVersion + `.
-- Use the run_command tool to execute investigative commands inside the VM (e.g., inspect attached state files, check package versions, test preliminary hypotheses).
-- The VM is for INVESTIGATION ONLY during planning. The execution phase will use it (or a fresh VM if a different Ubuntu version is needed).
+- This is a virtual machine, which supports full systemd, all snaps, and nested LXD. You can install and use the lxd snap inside this VM if you need to launch nested containers.
+- You execute commands via the run_command tool. All commands run as root.
+- The VM has network access.
 
 ## Critical: Reproduce the Bug, Not the Fix
-- Your goal is to reproduce the ORIGINAL BUG — trigger the broken behavior the reporter described.
-- Do NOT plan steps that install fixed versions of snapd or any package from -proposed or SRU channels.
+- Your goal is to trigger the BROKEN behavior described in the bug report.
+- Do NOT install fixed versions of snapd or any package from -proposed or SRU channels.
 - Use the stock/release version of the software that exhibits the bug.
 - If the bug report mentions a version where the bug was introduced, target that version.
 - If the bug report mentions a version where the bug was fixed, explicitly AVOID that version.
-- "Reproduced" means you observed the BROKEN behavior described in the bug report.
+- "Reproduced" means you observed the BROKEN behavior described in the bug report. If the software works correctly, that means the bug was NOT reproduced.
 
 ## Instructions
 1. Read the bug report carefully. Understand what the reporter observed and what conditions trigger the bug.
-2. If there are attachments (log files, configs, state.json, etc.), use the read_file tool to inspect them. For complex state files, you can also copy them into the VM and use run_command to interrogate them (e.g., "snap debug state state.json").
-3. Use run_command to investigate inside the VM: check package versions, explore snap state, test commands, or verify assumptions about the environment.
-4. Check the available skills below. Use describe_skill to get a summary, and load_skill to load detailed debugging commands relevant to the bug.
-5. Determine which Ubuntu version to use based on the bug tags, description, or comments. Use the codename mapping table below.
-6. Identify the buggy version and fixed version (if mentioned in the bug report) and note them in your plan.
-7. Plan a step-by-step reproduction strategy using shell commands that trigger the BROKEN behavior.
-8. Call report_plan with your structured plan. Do NOT ask for confirmation — call the tool directly.
+2. BEFORE investigating, review the available skills below. Use describe_skill to check which are relevant to the bug's domain (e.g., AppArmor, services, refresh), then load_skill on the most relevant ones. Skills contain expert commands and workflows that will make your investigation significantly more efficient — skipping this step often leads to wasted iterations.
+3. If there are attachments (log files, configs, state.json, etc.), use the read_file tool to inspect them. For complex state files, you can also copy them into the VM and use run_command to interrogate them (e.g., "snap debug state state.json").
+4. Determine which Ubuntu version to use based on the bug tags, description, or comments. Use the codename mapping table below. If the required version differs from the current VM (` + defaultUbuntuVersion + `), call relaunch_vm to get a VM with the correct Ubuntu version.
+5. Investigate the bug using run_command: check package versions, explore snap state, test commands, and verify assumptions about the environment.
+6. Set up the environment: install packages, configure services, install snaps as needed.
+7. Execute reproduction steps: run commands to trigger the bug. Check output after each step.
+8. Once you have genuinely attempted reproduction (including workarounds for any obstacles), call report_result with your findings. Do NOT ask for confirmation — call the tool directly.
 
 ## Tools Available
-- **run_command**: Execute a shell command inside the LXD VM for investigation (checking versions, inspecting state, testing commands).
+- **run_command**: Execute a shell command inside the LXD VM. Use this to install packages, run scripts, inspect files, and reproduce bugs.
 - **read_file**: Read an attachment file from the bug directory. Use this to inspect log files, config files, or any other attachments.
 - **describe_skill**: Get a short description of a debugging skill to check its relevance before loading.
 - **load_skill**: Load the full content of a debugging skill with detailed commands and workflows.
-- **report_plan**: Output your structured reproduction plan. This ends the planning session.
+- **query_snapd_revisions**: Look up the snapd snap revision-to-version mapping by date, architecture, revision number, or version string.
+- **relaunch_vm**: Relaunch the VM with a different Ubuntu version. Use this when the bug requires a specific Ubuntu version that differs from the current one. All previous VM state is lost.
+- **report_result**: Report whether the bug was reproduced. This ends the session.
 
 ## Important Guidelines
-- Each step should have a clear description of what it does and why.
-- Each step should have a concrete shell command that can be run in an LXD VM as root.
-- Always include an "apt-get update" step before installing packages.
+- Always run "apt-get update" before installing packages.
 - Use "DEBIAN_FRONTEND=noninteractive apt-get install -y ..." for unattended installs.
-- If the bug involves a specific snap, include a step to install it.
-- Do NOT include steps that upgrade snapd or other packages to versions containing the fix.
-- If the bug cannot be reproduced (requires specific hardware, closed-source components, etc.), still provide a best-effort plan and note the limitations in expected_result.
-- List all attachments you reviewed in the attachments_reviewed field.
+- If the bug involves a specific snap, install it with "snap install <name>".
+- If the bug requires a specific snapd version, check "snap version" first.
+- Do NOT upgrade snapd or other packages to versions that contain the fix for this bug.
+- Keep commands focused and check outputs between steps rather than running huge scripts blindly.
+- If a command hangs or takes too long, try a different approach.
+- Include a complete reproducer script in your report (whether or not the bug was reproduced).
 - Commands run via lxc exec without a pseudo-TTY. Avoid commands that require a TTY (e.g., stty, dialog, interactive prompts). To simulate terminal width, set COLUMNS (e.g., COLUMNS=80 snap list).
-- Some snaps cannot run inside unprivileged LXD containers (e.g., lxd, multipass). Prefer LXD virtual machines (set instance_type to "vm") for reproduction. Use containers (instance_type "container") only when the bug is specifically about behavior inside a container; in that case the plan should include steps to install and configure LXD inside the VM, then launch a nested container within it.
-- NEVER ask the user for permission or confirmation. Always call report_plan directly when your plan is ready.
+- Some snaps cannot run inside unprivileged LXD containers (e.g., lxd, multipass). The VM supports all snaps. If the bug is specifically about behavior inside a container, use the VM to install and configure LXD, then launch a nested container within it.
+- NEVER ask the user for permission or confirmation. Always call report_result directly when you have a determination.
+
+## Reproduction Methodology
+
+Use this structured approach when analyzing the bug and designing your reproduction, especially for non-trivial bugs (race conditions, intermittent failures, timing-dependent behavior):
+
+1. **Identify the marker.** Find a specific observable indicator of the bug: an error message, log line, exit code, or behavioral symptom described in the bug report. This is your success criterion — reproduction is confirmed when this marker is observed.
+2. **Trace the marker to source code.** Clone the snapd source (matching the installed version) and search for the static part of the error message. Identify the file, function, and line. Use the snapd-code-tracing skill — it covers how to distinguish static from dynamic parts of error messages and navigate the codebase. This step is MANDATORY — do not skip it.
+3. **Understand the execution path.** Read the code around the marker and work backward: what conditions cause execution to reach that point? What calls this function? What state must exist? Form a concrete hypothesis about the triggering scenario based on what you read in the code, not just the bug description.
+4. **Identify the triggering conditions.** Determine which combination of events, state, or timing leads to the marker. For race conditions, identify the specific concurrent operations that must overlap: which code path is the "victim" and which is the "interrupter"? What is the precise window of vulnerability?
+5. **Instrument for observability.** Add logging, tracing, or timing measurements to verify your hypothesis. For example: build snapd with additional debug prints, enable SNAPD_DEBUG=1 for verbose logging, or insert timing probes to measure how close concurrent events occur.
+6. **Trigger the conditions.** Based on your understanding of the code path, construct a targeted trigger. Your trigger should be derived from the code analysis in steps 2-4, not from generic parallel loops. Iterate based on instrumentation output.
+
+**MANDATORY: Steps 1-4 must be completed before attempting step 6.** You must demonstrate that you understand the code path and triggering conditions from the source code before trying to trigger the bug. Jumping straight from the bug description to brute-force trigger loops is not acceptable.
+
+### Anti-pattern: blind timing loops
+
+Do NOT write bash loops that randomly restart services, reload profiles, or run parallel operations hoping to hit a timing window. These almost never work because:
+- The race window is typically microseconds, and random timing has near-zero probability of hitting it.
+- Without understanding the code path, you cannot know which operations actually race.
+- Brute-force loops waste iteration budget without producing insight.
+
+Instead: trace the error to source code, understand what concurrent operations create the race, identify the specific window of vulnerability, and then construct a targeted trigger that forces the operations to overlap in the right way.
+
+## Incremental Approach
+
+Minimize time-to-answer by starting with the simplest possible reproduction and only adding complexity when the simpler attempt proves insufficient:
+
+- **Start with code analysis, not commands.** For any non-trivial bug (race conditions, intermittent failures, unclear error paths), your first action should be cloning the relevant source code and tracing the error marker. This is almost always faster than trial-and-error.
+- **Start minimal when executing.** If the bug involves a snap service, try with one snap before installing three. If it involves a config change, try the single relevant setting before replicating an entire production environment.
+- **Escalate systematically.** When a minimal attempt does not trigger the bug, identify specifically what is missing based on your code analysis and add only that. Do not jump from "simple attempt didn't work" to "rebuild snapd from source with custom instrumentation" — there are intermediate steps (adjusting timing, changing service ordering, adding concurrency).
+- **Avoid premature assumptions about difficulty.** Do not assume a race condition requires thousands of iterations or complex tooling to trigger. Many race conditions reproduce within a few attempts under the right conditions — if you understand the code path and target the right window.
+
+## Troubleshooting and Adaptation
+- If a step fails (e.g., a package or snap is not found, a command errors out), you MUST try to work around the problem rather than immediately giving up.
+- **Do NOT report failure after a single error.** Exhaust alternative approaches first:
+  - If a snap is not found, search for similar snaps ("snap find <keyword>"), use a different snap that has the same relevant feature (e.g., any snap with services), or build/sideload a minimal test snap.
+  - If a package is missing, check alternative repositories, try different package names, or find another way to achieve the same setup.
+  - If a command fails, read error messages carefully, check logs (journalctl, /var/log/), and investigate the root cause before deciding it blocks reproduction.
+- Think about WHAT each step is trying to achieve, not just the literal command. If the specific tool or package is unavailable, find another way to achieve the same goal.
+- Only report "not reproduced" when you have genuinely attempted the reproduction through alternative means and either confirmed the bug does not manifest OR exhausted all reasonable approaches. A missing package or snap is NOT sufficient reason to report failure — it means you need to adapt.
 
 `)
 
@@ -195,199 +237,19 @@ func BuildPlanningPrompt(bug *Bug, instanceName string, skills *SkillIndex) stri
 	return b.String()
 }
 
-// BuildPlanningUserMessage constructs the initial user message for the
-// planning phase.
-func BuildPlanningUserMessage(bug *Bug) string {
+// BuildReproduceUserMessage constructs the initial user message for the
+// single-phase reproduce command.
+func BuildReproduceUserMessage(bug *Bug) string {
 	msg := fmt.Sprintf(
-		"Analyze Launchpad bug #%d: %s\n\n"+
-			"Review the bug report, determine the correct Ubuntu version, "+
-			"and produce a step-by-step reproduction plan. Call report_plan when ready.",
+		"Reproduce Launchpad bug #%d: %s\n\n"+
+			"Start by using describe_skill to review which skills are relevant, then load the most applicable ones. "+
+			"Analyze the bug report, determine the correct Ubuntu version (use relaunch_vm if a different version is needed), "+
+			"investigate the environment, and attempt to reproduce the bug. "+
+			"Report your result using the report_result tool when done.",
 		bug.ID, bug.Title,
 	)
 	if len(bug.Attachments) > 0 {
 		msg += "\n\nUse read_file to inspect the bug's attachments."
 	}
 	return msg
-}
-
-// --- Execution prompt ---
-
-// BuildExecutionPrompt constructs the system prompt for the execution
-// phase. The execution LLM follows the plan in an LXD instance.
-func BuildExecutionPrompt(plan *ReproPlan, instanceName string, skills *SkillIndex) string {
-	var b strings.Builder
-
-	b.WriteString("You are an expert Ubuntu/snapd bug reproduction agent. Your goal is to execute a reproduction plan inside an LXD VM and trigger the ORIGINAL BUG — the broken behavior described in the bug report.\n\n")
-	b.WriteString("## Environment\n")
-	b.WriteString("- You are operating inside an LXD VM named \"" + instanceName + "\".\n")
-	b.WriteString("- This is a virtual machine, which supports full systemd, all snaps, and nested LXD. You can install and use the lxd snap inside this VM if the plan requires launching nested containers.\n")
-	b.WriteString(`- The instance runs Ubuntu ` + plan.UbuntuVersion + ` and has network access.
-- You execute commands via the run_command tool. All commands run as root.
-
-## Critical: Reproduce the Bug, Not the Fix
-- Your goal is to trigger the BROKEN behavior described in the bug report.
-- Do NOT install fixed versions of snapd or other packages. Do NOT enable -proposed or SRU channels.
-- Use the stock/release software already in the instance unless the plan specifies a particular buggy version.
-- "Reproduced" means you observed the BROKEN behavior. If the software works correctly, that means the bug was NOT reproduced.
-
-## Instructions
-1. Check the available skills below. Use describe_skill to get a summary, and load_skill to load detailed debugging commands relevant to the bug.
-2. Follow the reproduction plan below step by step.
-3. Execute each step using the run_command tool.
-4. Check the output after each step. If something fails or behaves unexpectedly, DO NOT give up — analyze the error, investigate alternatives, and adapt your approach. See the "Troubleshooting and Adaptation" section below.
-5. You may add additional diagnostic commands if needed (e.g., checking logs, verifying state).
-6. Once you have genuinely attempted reproduction (including workarounds for any obstacles), call report_result with your findings. Do NOT ask for confirmation — call the tool directly.
-
-## Tools Available
-- **run_command**: Execute a shell command inside the LXD instance.
-- **describe_skill**: Get a short description of a debugging skill to check its relevance before loading.
-- **load_skill**: Load the full content of a debugging skill with detailed commands and workflows.
-- **report_result**: Report whether the bug was reproduced. This ends the execution session.
-
-## Important Guidelines
-- Keep commands focused and check outputs between steps.
-- If a command hangs or takes too long, try a different approach.
-- Do NOT upgrade snapd or other packages to versions that contain the fix for this bug.
-- Include a complete reproducer script in your report (whether or not the bug was reproduced).
-- NEVER ask the user for permission or confirmation. Always call report_result directly when you have a determination.
-
-## Troubleshooting and Adaptation
-- The plan is a STARTING POINT, not a rigid script. If a step fails (e.g., a package or snap is not found, a command errors out), you MUST try to work around the problem rather than immediately giving up.
-- **Do NOT report failure after a single error.** Exhaust alternative approaches first:
-  - If a snap is not found, search for similar snaps ("snap find <keyword>"), use a different snap that has the same relevant feature (e.g., any snap with services), or build/sideload a minimal test snap.
-  - If a package is missing, check alternative repositories, try different package names, or find another way to achieve the same setup.
-  - If a command fails, read error messages carefully, check logs (journalctl, /var/log/), and investigate the root cause before deciding it blocks reproduction.
-- Think about WHAT the step is trying to achieve, not just the literal command. If the specific tool mentioned in the plan is unavailable, find another way to achieve the same goal.
-- Only report "not reproduced" when you have genuinely attempted the reproduction through alternative means and either confirmed the bug does not manifest OR exhausted all reasonable approaches. A missing package or snap is NOT sufficient reason to report failure — it means you need to adapt.
-
-`)
-
-	writeSkillIndex(&b, skills)
-	writeSnapdKnowledge(&b)
-
-	// Include the plan.
-	b.WriteString("## Reproduction Plan\n\n")
-	fmt.Fprintf(&b, "**Bug ID:** %d\n", plan.BugID)
-	fmt.Fprintf(&b, "**Title:** %s\n", plan.Title)
-	fmt.Fprintf(&b, "**Ubuntu Version:** %s\n", plan.UbuntuVersion)
-	if plan.InstanceType != "" {
-		fmt.Fprintf(&b, "**Instance Type:** %s\n", plan.InstanceType)
-	}
-	fmt.Fprintf(&b, "**Expected Result:** %s\n", plan.ExpectedResult)
-
-	b.WriteString("\n### Steps\n\n")
-	for i, step := range plan.Steps {
-		fmt.Fprintf(&b, "**Step %d:** %s\n", i+1, step.Description)
-		fmt.Fprintf(&b, "```bash\n%s\n```\n\n", step.Command)
-	}
-
-	return b.String()
-}
-
-// BuildExecutionUserMessage constructs the initial user message for the
-// execution phase.
-func BuildExecutionUserMessage(plan *ReproPlan) string {
-	return fmt.Sprintf(
-		"Execute the reproduction plan for bug #%d: %s\n\n"+
-			"Follow the steps in the plan, running each command and checking the output. "+
-			"Adapt if needed. Report your result using the report_result tool when done.",
-		plan.BugID, plan.Title,
-	)
-}
-
-// --- Legacy prompt (kept for backward compatibility) ---
-
-// BuildSystemPrompt constructs a combined system prompt for a single-phase
-// agent that does both planning and execution. Used by the reproduce command.
-func BuildSystemPrompt(bug *Bug, containerName string, skills *SkillIndex) string {
-	var b strings.Builder
-
-	b.WriteString("You are an expert Ubuntu/snapd bug reproduction agent. Your goal is to trigger the ORIGINAL BUG described in a Launchpad bug report inside an LXD instance.\n\n")
-	b.WriteString("## Environment\n")
-	b.WriteString("- You are operating inside an LXD instance named \"" + containerName + "\".\n")
-	b.WriteString(`- The instance runs Ubuntu and has network access.
-- You execute commands via the run_command tool. All commands run as root.
-
-## Critical: Reproduce the Bug, Not the Fix
-- Your goal is to trigger the BROKEN behavior described in the bug report.
-- Do NOT install fixed versions of snapd or other packages. Do NOT enable -proposed or SRU channels.
-- Use the stock/release software already in the instance.
-- "Reproduced" means you observed the BROKEN behavior. If the software works correctly, that means the bug was NOT reproduced.
-
-## Instructions
-1. Read the bug report carefully. Understand what the reporter observed.
-2. Plan a reproduction strategy. Think step by step.
-3. Set up the environment: install packages, configure services, etc.
-4. Write and execute a reproduction script.
-5. Observe the output and determine if the bug is reproduced.
-6. Call report_result with your findings. Do NOT ask for confirmation — call the tool directly.
-
-## Important Guidelines
-- Always run "apt-get update" before installing packages.
-- Use "DEBIAN_FRONTEND=noninteractive apt-get install -y ..." for unattended installs.
-- If the bug involves a specific snap, install it with "snap install <name>".
-- If the bug requires a specific snapd version, check "snap version" first.
-- Do NOT upgrade snapd or other packages to versions that contain the fix for this bug.
-- Keep commands focused and check outputs between steps rather than running huge scripts blindly.
-- If a command hangs or takes too long, try a different approach.
-- NEVER ask the user for permission or confirmation. Always call report_result directly when you have a determination.
-
-## Troubleshooting and Adaptation
-- If a step fails (e.g., a package or snap is not found, a command errors out), you MUST try to work around the problem rather than immediately giving up.
-- **Do NOT report failure after a single error.** Exhaust alternative approaches first:
-  - If a snap is not found, search for similar snaps ("snap find <keyword>"), use a different snap that has the same relevant feature (e.g., any snap with services), or build/sideload a minimal test snap.
-  - If a package is missing, check alternative repositories, try different package names, or find another way to achieve the same setup.
-  - If a command fails, read error messages carefully, check logs (journalctl, /var/log/), and investigate the root cause before deciding it blocks reproduction.
-- Think about WHAT each step is trying to achieve, not just the literal command. If the specific tool or package is unavailable, find another way to achieve the same goal.
-- Only report "not reproduced" when you have genuinely attempted the reproduction through alternative means and either confirmed the bug does not manifest OR exhausted all reasonable approaches. A missing package or snap is NOT sufficient reason to report failure — it means you need to adapt.
-
-`)
-
-	writeSkillIndex(&b, skills)
-	writeSnapdKnowledge(&b)
-	writeBugReport(&b, bug)
-
-	if len(bug.Attachments) > 0 {
-		b.WriteString("\nNote: Attachment files have been downloaded locally. Use run_command to read them if needed (e.g., cat the file path).\n")
-	}
-
-	return b.String()
-}
-
-// BuildUserMessage constructs the initial user message for the
-// single-phase agent.
-func BuildUserMessage(bug *Bug) string {
-	return fmt.Sprintf(
-		"Please reproduce Launchpad bug #%d: %s\n\nAnalyze the bug report above and attempt to reproduce it in the container. "+
-			"Start by understanding the problem, then set up the environment and run commands to trigger the bug. "+
-			"Report your result using the report_result tool when done.",
-		bug.ID, bug.Title,
-	)
-}
-
-// --- Plan serialization ---
-
-// SavePlan writes a ReproPlan to a JSON file.
-func SavePlan(plan *ReproPlan, path string) error {
-	data, err := json.MarshalIndent(plan, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshalling plan: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("writing plan: %w", err)
-	}
-	return nil
-}
-
-// LoadPlan reads a ReproPlan from a JSON file.
-func LoadPlan(path string) (*ReproPlan, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading plan: %w", err)
-	}
-	var plan ReproPlan
-	if err := json.Unmarshal(data, &plan); err != nil {
-		return nil, fmt.Errorf("parsing plan: %w", err)
-	}
-	return &plan, nil
 }
