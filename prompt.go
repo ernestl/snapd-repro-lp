@@ -150,13 +150,20 @@ func BuildReproducePrompt(bug *Bug, instanceName string, skills *SkillIndex) str
 
 ## Instructions
 1. Read the bug report carefully. Understand what the reporter observed and what conditions trigger the bug.
-2. BEFORE investigating, review the available skills below. Use describe_skill to check which are relevant to the bug's domain (e.g., AppArmor, services, refresh), then load_skill on the most relevant ones. Skills contain expert commands and workflows that will make your investigation significantly more efficient — skipping this step often leads to wasted iterations.
-3. If there are attachments (log files, configs, state.json, etc.), use the read_file tool to inspect them. For complex state files, you can also copy them into the VM and use run_command to interrogate them (e.g., "snap debug state state.json").
-4. Determine which Ubuntu version to use based on the bug tags, description, or comments. Use the codename mapping table below. If the required version differs from the current VM (` + defaultUbuntuVersion + `), call relaunch_vm to get a VM with the correct Ubuntu version.
-5. Investigate the bug using run_command: check package versions, explore snap state, test commands, and verify assumptions about the environment.
-6. Set up the environment: install packages, configure services, install snaps as needed.
-7. Execute reproduction steps: run commands to trigger the bug. Check output after each step.
-8. Once you have genuinely attempted reproduction (including workarounds for any obstacles), call report_result with your findings. Do NOT ask for confirmation — call the tool directly.
+2. **Verify the environment.** Before anything else, check the VM matches what the bug requires:
+   - Ubuntu version: run "lsb_release -a" and compare with the bug's tags/description. If a different version is needed, call relaunch_vm immediately.
+   - Kernel version: run "uname -r" and compare with any kernel version mentioned in the bug.
+   - snapd version: run "snap version" to see both the snapd deb and re-exec versions. Note that the running snapd may be re-executing from /snap/snapd/<rev>/usr/lib/snapd/snapd; "snap version" shows this. Install the correct snapd snap revision/channel if the bug requires a specific version.
+   - AppArmor: run "aa-status --version" and "cat /sys/kernel/security/apparmor/features/domain/version" to check the AppArmor parser and kernel feature versions.
+   - Any other component mentioned in the bug (e.g., specific kernel module, LXD version, specific snap version).
+   If the bug mechanism is well understood and it is clear that a specific version is NOT required for reproduction, you may skip installing that exact version — we want the simplest reproducer possible. But you must explicitly state which checks you are skipping and why.
+3. BEFORE investigating, review the available skills below. Use describe_skill to check which are relevant to the bug's domain (e.g., AppArmor, services, refresh), then load_skill on the most relevant ones. Skills contain expert commands and workflows that will make your investigation significantly more efficient — skipping this step often leads to wasted iterations.
+4. If there are attachments (log files, configs, state.json, etc.), use the read_file tool to inspect them. For complex state files, you can also copy them into the VM and use run_command to interrogate them (e.g., "snap debug state state.json").
+5. Determine which Ubuntu version to use based on the bug tags, description, or comments. Use the codename mapping table below. If the required version differs from the current VM (` + defaultUbuntuVersion + `), call relaunch_vm to get a VM with the correct Ubuntu version.
+6. Investigate the bug using run_command: check package versions, explore snap state, test commands, and verify assumptions about the environment.
+7. Set up the environment: install packages, configure services, install snaps as needed.
+8. Execute reproduction steps: run commands to trigger the bug. Check output after each step.
+9. Once you have genuinely attempted reproduction (including workarounds for any obstacles), call report_result with your findings. Do NOT ask for confirmation — call the tool directly.
 
 ## Tools Available
 - **run_command**: Execute a shell command inside the LXD VM. Use this to install packages, run scripts, inspect files, and reproduce bugs.
@@ -185,13 +192,17 @@ func BuildReproducePrompt(bug *Bug, instanceName string, skills *SkillIndex) str
 Use this structured approach when analyzing the bug and designing your reproduction, especially for non-trivial bugs (race conditions, intermittent failures, timing-dependent behavior):
 
 1. **Identify the marker.** Find a specific observable indicator of the bug: an error message, log line, exit code, or behavioral symptom described in the bug report. This is your success criterion — reproduction is confirmed when this marker is observed.
-2. **Trace the marker to source code.** Clone the snapd source (matching the installed version) and search for the static part of the error message. Identify the file, function, and line. Use the snapd-code-tracing skill — it covers how to distinguish static from dynamic parts of error messages and navigate the codebase. This step is MANDATORY — do not skip it.
-3. **Understand the execution path.** Read the code around the marker and work backward: what conditions cause execution to reach that point? What calls this function? What state must exist? Form a concrete hypothesis about the triggering scenario based on what you read in the code, not just the bug description.
-4. **Identify the triggering conditions.** Determine which combination of events, state, or timing leads to the marker. For race conditions, identify the specific concurrent operations that must overlap: which code path is the "victim" and which is the "interrupter"? What is the precise window of vulnerability?
-5. **Instrument for observability.** Add logging, tracing, or timing measurements to verify your hypothesis. For example: build snapd with additional debug prints, enable SNAPD_DEBUG=1 for verbose logging, or insert timing probes to measure how close concurrent events occur.
-6. **Trigger the conditions.** Based on your understanding of the code path, construct a targeted trigger. Your trigger should be derived from the code analysis in steps 2-4, not from generic parallel loops. Iterate based on instrumentation output.
+2. **Check out the correct source version.** Clone snapd and check out the tag matching the installed snapd version. Snapd releases are tagged with the version number (e.g. "2.63", "2.64.1"). The deb version has "+ubuntu..." appended but the tag does not. Run "snap version" to see the running version, then "git tag -l '<version>*'" to find the exact tag. This is CRITICAL — error messages, code paths, and race windows may differ between versions, so tracing the wrong version can lead you to code that does not exist in the running binary.
+3. **Trace the marker to source code.** Search for the static part of the error message in the correct version. Identify the file, function, and line. Use the snapd-code-tracing skill — it covers how to distinguish static from dynamic parts of error messages and navigate the codebase. This step is MANDATORY — do not skip it.
+4. **Understand the execution path.** Read the code around the marker and work backward: what conditions cause execution to reach that point? What calls this function? What state must exist? Form a concrete hypothesis about the triggering scenario based on what you read in the code, not just the bug description.
+5. **Identify the triggering conditions.** Determine which combination of events, state, or timing leads to the marker. For race conditions, identify the specific concurrent operations that must overlap: which code path is the "victim" and which is the "interrupter"? What is the precise window of vulnerability?
+6. **Instrument for observability.** Add logging to verify your hypothesis and measure timing. Build snapd from source with logger.Noticef markers at key points. For race conditions, place TWO markers:
+   - **Problem marker:** at the code line where the bug manifests (the error path).
+   - **Trigger marker:** at the code line where the suspected concurrent operation occurs.
+   Then compare timestamps in the journal output. If both markers fire but are far apart, adjust your trigger to narrow the gap. If only one fires, your hypothesis about which code path is involved may be wrong. See the snapd-code-tracing skill for how to build and run a modified snapd.
+7. **Trigger the conditions.** Based on your understanding of the code path, construct a targeted trigger. Your trigger should be derived from the code analysis in steps 2-5, not from generic parallel loops. Iterate based on instrumentation output — use the timestamp gap between your markers to guide adjustments.
 
-**MANDATORY: Steps 1-4 must be completed before attempting step 6.** You must demonstrate that you understand the code path and triggering conditions from the source code before trying to trigger the bug. Jumping straight from the bug description to brute-force trigger loops is not acceptable.
+**MANDATORY: Steps 1-5 must be completed before attempting step 7.** You must demonstrate that you understand the code path and triggering conditions from the source code before trying to trigger the bug. Jumping straight from the bug description to brute-force trigger loops is not acceptable.
 
 ### Anti-pattern: blind timing loops
 
@@ -200,7 +211,7 @@ Do NOT write bash loops that randomly restart services, reload profiles, or run 
 - Without understanding the code path, you cannot know which operations actually race.
 - Brute-force loops waste iteration budget without producing insight.
 
-Instead: trace the error to source code, understand what concurrent operations create the race, identify the specific window of vulnerability, and then construct a targeted trigger that forces the operations to overlap in the right way.
+Instead: trace the error to source code (at the correct version), understand what concurrent operations create the race, instrument with logger.Noticef markers at both the problem site and the trigger site, then construct a targeted trigger that forces the operations to overlap. Use the timestamp gap between your markers to iterate.
 
 ## Incremental Approach
 

@@ -73,13 +73,31 @@ func TestBuildReproducePrompt(t *testing.T) {
 		// Methodology sections.
 		"## Reproduction Methodology",
 		"Identify the marker",
+		"Check out the correct source version",
 		"Trace the marker to source code",
 		"Understand the execution path",
 		"Identify the triggering conditions",
 		"Instrument for observability",
 		"Trigger the conditions",
-		"MANDATORY: Steps 1-4 must be completed",
+		"MANDATORY: Steps 1-5 must be completed",
 		"Anti-pattern: blind timing loops",
+
+		// Environment verification.
+		"Verify the environment",
+		"lsb_release",
+		"snap version",
+		"aa-status",
+
+		// Code version awareness.
+		"Check out the correct source version",
+		"Snapd releases are tagged with the version number",
+		"tracing the wrong version",
+
+		// Instrumentation strategy.
+		"logger.Noticef markers",
+		"Problem marker",
+		"Trigger marker",
+		"timestamp gap",
 
 		// Incremental approach.
 		"## Incremental Approach",
@@ -100,9 +118,9 @@ func TestBuildReproducePrompt(t *testing.T) {
 		}
 	}
 
-	// Skill review should be step 2 in instructions.
-	if !strings.Contains(prompt, "2. BEFORE investigating, review the available skills") {
-		t.Error("reproduce prompt should promote skill review to step 2")
+	// Skill review should be step 3 in instructions (after env verification).
+	if !strings.Contains(prompt, "3. BEFORE investigating, review the available skills") {
+		t.Error("reproduce prompt should have skill review at step 3")
 	}
 
 	// Version relaunch should be mentioned in instructions.

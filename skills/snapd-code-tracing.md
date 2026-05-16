@@ -5,17 +5,32 @@ it for deeper debugging, and running a modified build.
 
 ## Getting the source code
 
+**CRITICAL: You must check out the tag matching the running snapd version.**
+Snapd releases are tagged with the version number (e.g. `2.63`, `2.64.1`).
+The deb version has `+ubuntu...` appended but the git tag does not. Error
+messages, code paths, and race windows may differ between versions — tracing
+the wrong version will lead you to code that does not exist in the running
+binary.
+
 ```bash
+# Check the RUNNING snapd version (re-exec version takes precedence)
+snap version
+# Example output:
+#   snap    2.63+git2748.g9797573
+#   snapd   2.63+git2748.g9797573
+#   ...
+
+# Clone the source
 git clone https://github.com/snapcore/snapd.git
 cd snapd
 
-# Check the installed snapd version to match the source
-snap version
-
-# Checkout the matching tag (e.g. 2.63)
+# Find and checkout the matching tag
 git tag -l '2.63*'
 git checkout 2.63
 ```
+
+If the `snap version` output shows a deb version like `2.63+22.04`, the
+tag is still just `2.63`. Strip the `+ubuntu...` / `+XX.YY` suffix.
 
 ## Snapd code structure
 
@@ -221,6 +236,38 @@ logger.Debugf(">>> entering doInstall: snap=%q, revision=%s", snapName, rev)
 // Use logger.Noticef for output always visible in the journal
 logger.Noticef(">>> checkpoint: snap=%q state=%v", snapName, st)
 ```
+
+### Instrumentation for race conditions
+
+For races, place TWO `logger.Noticef` markers:
+
+1. **Problem marker** — at the code line where the bug manifests:
+   ```go
+   logger.Noticef(">>> PROBLEM-MARKER: reached error path in doFoo, snap=%q", snapName)
+   ```
+2. **Trigger marker** — at the code line where the suspected concurrent operation
+   occurs (e.g., a goroutine that modifies shared state):
+   ```go
+   logger.Noticef(">>> TRIGGER-MARKER: starting concurrent bar, snap=%q", snapName)
+   ```
+
+After running the instrumented build, compare timestamps in the journal:
+
+```bash
+journalctl -u snapd --no-pager | grep '>>> .*MARKER'
+```
+
+- If both markers fire and timestamps are far apart (seconds), your trigger
+  is not overlapping — adjust timing.
+- If both markers fire and timestamps are close (milliseconds), the race
+  window is within reach — tighten the trigger.
+- If only one marker fires, your hypothesis about which code path is
+  involved may be wrong — re-examine the source.
+- If neither fires, the code path is not being reached — check version,
+  prerequisites, or the trigger scenario.
+
+Use the timestamp gap to iterate: change the trigger, re-run, compare
+timestamps, repeat until the gap narrows and the race fires.
 
 Rebuild after making changes: `go build -o /tmp/snapd ./cmd/snapd`
 
